@@ -1,0 +1,31 @@
+[project]
+name = "rnse"
+version = "0.1.0"
+description = "Reverse engineering the Audi RNS-E front-panel control board: protocol decoder and bench instrumentation"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "André Carvalho", email = "afecarvalho@gmail.com" },
+]
+license = "Apache-2.0"
+license-files = ["LICENSE", "LICENSE-docs", "NOTICE"]
+keywords = ["reverse-engineering", "audi", "rns-e", "uart", "sigrok", "mb90561a"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "pyserial>=3.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/RedRoserade/rns-e"
+Documentation = "https://github.com/RedRoserade/rns-e/blob/main/README.md"
+Issues = "https://github.com/RedRoserade/rns-e/issues"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"

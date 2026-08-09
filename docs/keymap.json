@@ -1,0 +1,156 @@
+{
+  "buttons": {
+    "back": {
+      "bit": 5,
+      "byte": 2,
+      "label": "P2.5",
+      "mask": 32,
+      "presses": 3
+    },
+    "bottom_left_quad": {
+      "bit": 7,
+      "byte": 2,
+      "label": "P2.7",
+      "mask": 128,
+      "presses": 3
+    },
+    "bottom_right_quad": {
+      "bit": 6,
+      "byte": 2,
+      "label": "P2.6",
+      "mask": 64,
+      "presses": 3
+    },
+    "car": {
+      "bit": 7,
+      "byte": 1,
+      "label": "P1.7",
+      "mask": 128,
+      "presses": 3
+    },
+    "cd_tv_sd_media": {
+      "bit": 6,
+      "byte": 0,
+      "label": "P0.6",
+      "mask": 64,
+      "presses": 3
+    },
+    "eject": {
+      "bit": 7,
+      "byte": 3,
+      "label": "P3.7",
+      "mask": 128,
+      "presses": 3
+    },
+    "flip_screen": {
+      "bit": 5,
+      "byte": 1,
+      "label": "P1.5",
+      "mask": 32,
+      "presses": 3
+    },
+    "fwd": {
+      "bit": 3,
+      "byte": 2,
+      "label": "P2.3",
+      "mask": 8,
+      "presses": 3
+    },
+    "info": {
+      "bit": 1,
+      "byte": 0,
+      "label": "P0.1",
+      "mask": 2,
+      "presses": 3
+    },
+    "name": {
+      "bit": 5,
+      "byte": 0,
+      "label": "P0.5",
+      "mask": 32,
+      "presses": 3
+    },
+    "nav": {
+      "bit": 2,
+      "byte": 0,
+      "label": "P0.2",
+      "mask": 4,
+      "presses": 3
+    },
+    "radio": {
+      "bit": 7,
+      "byte": 0,
+      "label": "P0.7",
+      "mask": 128,
+      "presses": 3
+    },
+    "return": {
+      "bit": 3,
+      "byte": 1,
+      "label": "P1.3",
+      "mask": 8,
+      "presses": 3
+    },
+    "scroll_click": {
+      "bit": 4,
+      "byte": 5,
+      "label": "P5.4",
+      "mask": 16,
+      "presses": 3
+    },
+    "setup": {
+      "bit": 6,
+      "byte": 1,
+      "label": "P1.6",
+      "mask": 64,
+      "presses": 3
+    },
+    "tel": {
+      "bit": 3,
+      "byte": 0,
+      "label": "P0.3",
+      "mask": 8,
+      "presses": 3
+    },
+    "top_left_quad": {
+      "bit": 1,
+      "byte": 1,
+      "label": "P1.1",
+      "mask": 2,
+      "presses": 3
+    },
+    "top_right_quad": {
+      "bit": 2,
+      "byte": 1,
+      "label": "P1.2",
+      "mask": 4,
+      "presses": 3
+    }
+  },
+  "rotaries": {
+    "scroll_wheel": {
+      "ccw": {
+        "channel": 2,
+        "detents": 76,
+        "dir_bit": 1
+      },
+      "cw": {
+        "channel": 2,
+        "detents": 48,
+        "dir_bit": 0
+      }
+    },
+    "volume_knob": {
+      "ccw": {
+        "channel": 0,
+        "detents": 104,
+        "dir_bit": 1
+      },
+      "cw": {
+        "channel": 0,
+        "detents": 72,
+        "dir_bit": 0
+      }
+    }
+  }
+}

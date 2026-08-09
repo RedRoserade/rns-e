@@ -1,0 +1,25 @@
+rnse — Audi RNS-E front-panel reverse engineering
+Copyright 2026 André Carvalho
+
+This product includes software and documentation developed as part of the rnse
+project: https://github.com/RedRoserade/rns-e
+
+Source code (src/, arduino/) is licensed under the Apache License, Version 2.0.
+See the LICENSE file.
+
+Documentation and logic-analyzer captures (docs/, pulseview/) are licensed under
+the Creative Commons Attribution 4.0 International License (CC BY 4.0). See the
+LICENSE-docs file. If you reuse the protocol write-up or the key map, please
+credit "André Carvalho, rnse project" with a link to the repository.
+
+---
+
+Trademark notice, for identification purposes only:
+
+Audi, RNS-E and Navigation Plus are trademarks of AUDI AG. Aisin is a trademark
+of Aisin Corporation; the unit was manufactured by Aisin AW Co., Ltd., now part
+of Aisin Corporation. MB90561A is a Fujitsu part designation, now held by
+Infineon Technologies AG via Cypress Semiconductor. This project is independent
+and is not affiliated with, authorised by, or endorsed by any of them.
+
+No vendor datasheet is redistributed in this repository; see docs/datasheets/.
