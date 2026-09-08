@@ -13,11 +13,21 @@ The panel is built around a Fujitsu MB90561A and talks to the main unit over a
 understood well enough to boot the panel from an Arduino and read every button
 and both encoders.
 
-Everything here was derived from logic-analyzer captures of a bench setup — no
+Everything here was derived from logic-analyzer captures of a bench setup, DMM
+tracing, and the connector legend printed on the head unit's own case — no
 vendor documentation was used beyond the publicly available MB90561A datasheet.
 
 **Full findings: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).** This README is the
 map; that file is the territory.
+
+Four documents, in decreasing order of how settled they are:
+
+| document | what it covers | status |
+|---|---|---|
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | the 9-pin serial link — framing, boot, keys, encoders | measured, mostly established |
+| [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md) | the LED driver chain and the analog stage | measured, one node left |
+| [`docs/CANBUS.md`](docs/CANBUS.md) | using a head unit and the vehicle CAN bus to find the backlight command | connector established, experiment **not yet run** |
+| [`docs/HARDWARE.md`](docs/HARDWARE.md) | what to buy for the above, and how to source a head unit to sniff | shopping list |
 
 ---
 
@@ -26,9 +36,17 @@ map; that file is the territory.
 ```
 docs/
   PROTOCOL.md      the protocol write-up — the main artefact of this project
+  BACKLIGHT.md     the backlight driver chain and the analog stage. Supersedes
+                   PROTOCOL.md §9
+  CANBUS.md        plan for driving a head unit over CAN to capture the
+                   head-unit-to-panel direction. Not yet executed
+  HARDWARE.md      bench shopping list, and notes on sourcing a second head
+                   unit to sniff and resell
   keymap.json      button/encoder map, machine-readable (generated)
   keymap.md        the same map as a table (generated)
   rns-e.drawio.svg circuit diagram (of what I was able to find so far)
+  rns-e-pinout.png photo of the connector legend printed on the head unit,
+                   transcribed in CANBUS.md §2
   datasheets/      where to put a local MB90561A datasheet (not redistributed)
 
 src/rnse/
@@ -72,8 +90,8 @@ with the panel connected to a real head unit:
 | 5   | PPG1 output — purpose unknown | +5.0     |
 | 6   | reset — active low, runs HIGH | +5.0     |
 | 7   | power / mute button           | +5.0     |
-| 8   | to 8-pin IC pin 7             | +4.5     |
-| 9   | to 8-pin IC pin 8             | +8.0     |
+| 8   | rail monitor — VRAIL / 2      | +4.5     |
+| 9   | +9 V LED rail, from head unit | +9.0     |
 
 Two things on that list are _not_ on the serial bus and cannot be reached by
 talking to the panel:
@@ -82,9 +100,14 @@ talking to the panel:
   microcontroller at all. It shunts **pin 7 to ground** and the head unit senses
   it directly, so it produces no serial traffic. Read it as a plain active-low
   switch.
-- **The backlight** is driven by an 8-pin IC on pins 8/9, confirmed wired to at
-  least some of the display's LEDs. It is unidentified — marked `5W01` on one line,
-  and `9.9` upside down on the other. I have yet to do any live reverse engineering on this IC.
+- **The backlight** is switched by a two-transistor high-side driver, TR5006
+  gated by TR5015, fed from the +9 V rail the head unit supplies on pin 9. The
+  8-pin IC — a Toshiba TA75W01FU dual op-amp, marked `5W01` with a `9.9` lot
+  code — is *not* in the switching path; op-amp A is parked and op-amp B is a
+  unity-gain buffer sending VRAIL / 2 back up pin 8 as a rail monitor. What
+  drives TR5015's base is the one node still untraced. Full write-up in
+  [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md), which supersedes this paragraph if
+  the two ever disagree.
 
 ### Wiring to an Arduino
 
@@ -209,12 +232,25 @@ behind each, is §11 of [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 6. **Why the panel answers only every 2nd–3rd byte** during a sweep, regardless
    of the gap between bytes. The skip scales with the byte rate rather than
    being a fixed timeout, which weakens the "ACK timeout then re-arm" theory.
-7. **What the backlight IC is.** Confirmed to drive backlight LEDs, on
-   connector pins 8/9, marked `5W01` / `9.9` — but not matched to a part, so
-   how it is commanded (if at all) is unknown.
+7. **What drives TR5015's base.** The last unknown node in the backlight
+   circuit. The 8-pin IC is now identified — a Toshiba TA75W01FU dual op-amp,
+   and a bystander to the switching path — and everything downstream of that
+   base is traced. All nine connector pins are accounted for and none is a
+   backlight enable, so the drive must come from the MCU, which implies a
+   serial command nobody has seen. See
+   [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md).
 8. **What PPG1 on connector pin 5 carries.** It is a hardware PWM output from
    the MB90561A that has never been captured. Worth an LA channel next time the
-   panel is on the bench.
+   panel is on the bench. Four other PPG channels are also unaccounted for, and
+   one of them is the prime suspect for the backlight drive.
+9. **Everything the head unit says to the panel.** Every message decoded so far
+   travels panel → head unit, because every capture so far was taken with the
+   panel driven by an Arduino that only knows the commands already guessed. A
+   powered head unit knows all of them. [`docs/CANBUS.md`](docs/CANBUS.md) is
+   the plan for putting one on the wire. Two things point the same way: the
+   connector legend shows **no illumination pin on any connector**, and a head
+   unit powered on the bench with no CAN boots to its PIN screen while the
+   attached, powered panel stays dark. So the stimulus has to arrive over CAN.
 
 ## Status
 
