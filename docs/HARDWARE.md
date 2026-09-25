@@ -38,7 +38,7 @@ it unblocks T2 and T2 is what is actually stuck.
 | **Quadlock plug with pigtail** | Male quadlock for RNS-E, flying leads | ~10 | You will re-seat this many times. Stabbing wires into connector cavities damages the contacts on a unit you intend to resell. |
 | **Inline fuse holder + blade fuses** | 3–5 A for bench use | ~5 | See below on rating. |
 | **KKL / VAG-COM K-Line interface** | any USB KKL cable | 10–20 | Optional, but see §7 — the label shows a K-Line pin, which is a second way into the bricked unit |
-| **2× 120 Ω resistors** | ¼ W, any | ~1 | CAN termination. Measure across the head unit's CAN pair first: ~120 Ω means the unit is terminated and you add only the adapter-side resistor. Many CANable boards carry theirs on-board, sometimes on a solder jumper. |
+| ~~**2× 120 Ω resistors**~~ | — | — | **Do not fit.** The bus turned out to be low-speed fault-tolerant CAN, and 120 Ω across the pair stops all communication (`CANBUS.md` §2.2). Leave the CANable's on-board 120 Ω jumper **open** too. For a permanent bench, use a low-speed transceiver (TJA1055 class) instead of the adapter's high-speed one. |
 
 ### Only four wires are needed
 

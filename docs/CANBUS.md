@@ -7,9 +7,11 @@ Companion to `PROTOCOL.md` (the panel serial link) and `BACKLIGHT.md` (the LED
 driver chain). Where those two describe measurements, **this file describes an
 experiment that has not been run yet.**
 
-**Status. The experiment in §6 has not been run.** What *is* measured: the
-connector legend in §2, read off the unit's own case; the panel backlight
-staying dark on a no-CAN power-up in §3; and the 30-minute shutdown in §5. Note
+**Status. T4 has been run; the experiment in §6 has not.** What *is* measured:
+the connector legend in §2, read off the unit's own case; the physical layer and
+bitrate in §2.2 (2026-09-25); the unit's network-management traffic and its
+response to a second node in §4.1; the panel backlight staying dark on a no-CAN
+power-up in §3; and the 30-minute shutdown in §5. Note
 that §5 and part of §3 were observed **before** the unit was bricked, and say
 nothing about its current state — §5 is explicit about what that costs.
 Everything about CAN message *content* — the rest of §3, and §4 — is third-party
@@ -190,28 +192,49 @@ The RGB and sync pins are the video input path — the same connector the
 navigation display feed uses, and the one third-party video interfaces target.
 Not relevant here, recorded for completeness.
 
-### 2.2 The bus — bitrate still **third-party, unverified**
+### 2.2 The bus — **established** (2026-09-25)
 
-The connector is settled; the signalling on it is not.
+Measured on the bench with a gs_usb (candleLight) adapter on `can0`.
 
 | property | value | source |
 |---|---|---|
 | physical | CAN-H on D9, CAN-L on D10 | **label — established** |
+| physical layer | **low-speed fault-tolerant CAN** (ISO 11898-3), not high-speed | **measured — established**: idle bus CAN-H ≈ 0 V (a few mV), CAN-L ≈ 5 V |
 | bus | infotainment / comfort CAN | VAG PQ platform convention |
-| bitrate | **100 kbit/s** | `noobychris/audi-can-rpi` sets `bitrate=100000`; PQ platform docs |
-| frame format | standard 11-bit identifiers, not extended | both reference scripts use `extended=False` |
+| bitrate | **100 kbit/s** | **measured — established**: frames received with zero bus errors at 100k; also what `noobychris/audi-can-rpi` sets |
+| frame format | standard 11-bit identifiers | **measured — established** for `0x436`; both reference scripts use `extended=False` |
+| TX path | frames sent by the host are acknowledged | **measured — established**: 28 frames sent, zero TX / bus errors, and the unit is the only other node on the bus |
 
 Note that the powertrain CAN on the same platform runs at **500 kbit/s**. Some
 published bench examples use 500k and report the radio ignoring them; that is a
 plausible explanation for at least one of the failed attempts in the wild.
 
+#### Termination: do **not** fit 120 Ω
+
+With a 120 Ω resistor across D9 / D10 there is **no communication at all**.
+Without it, the bus runs cleanly.
+
+That is what the idle voltages predict. On high-speed CAN both wires idle near
+2.5 V and 120 Ω at each end is mandatory. On fault-tolerant CAN the recessive
+state is CAN-H low and CAN-L high, and each node terminates its own wires to
+its transceiver's RTH / RTL pins through a few kΩ. A 120 Ω load across the pair
+swamps that and drags the differential signal down.
+
+> **Correction.** An earlier revision said termination was unknown and told you
+> to measure D9 / D10 for ~120 Ω. `HARDWARE.md` listed two 120 Ω resistors as
+> required. Both assumed high-speed CAN. On this bus, adding 120 Ω breaks it.
+
+**The adapter is a mismatch that happens to work.** A CANable / candleLight
+carries a high-speed transceiver. It reads the fault-tolerant bus correctly and
+its dominant bits reach the unit, as the zero error counters show, but only on
+short bench wiring and with its own 120 Ω jumper **open**. A low-speed
+fault-tolerant transceiver (TJA1055 class) is the correct part if the bench
+becomes permanent or the leads get long.
+
 `peetereczek/openauto-audi-api` constructs its bus with no bitrate at all
 (`can.interface.Bus(can_interface, bustype='socketcan')`), relying on the
 interface having been configured by `ip link` beforehand. Do not copy that call
 as evidence of a bitrate; it carries none.
-
-Termination is unknown. Measure across D9 / D10 with the unit unpowered: ~120 Ω
-means the unit terminates the bus and only the adapter end needs a resistor.
 
 ---
 
@@ -334,6 +357,88 @@ controls*, i.e. traffic in the same functional area as this project but on the
 vehicle side of the head unit. It is not the panel link, but it may share
 vocabulary with it.
 
+### 4.1 The unit's own traffic: network management — **established** (2026-09-25)
+
+**The unit on the bench is the bricked one, and it is boot-looping.** Everything
+below was measured on it.
+
+**The boot loop is 45.9 s, and NM restarts with it — established.** Guided
+session `captures/session-20260925-175559.log`: the unit's NM restart sequence
+(below) appears at +3.2 s after 12 V is applied, then at 49.5, 95.4, 141.3,
+187.2 and 233.2 s — every 45.9 s, matching the operator's ~45 s estimate of the
+visible loop. In between, the CAN side stays up (limp-home, or a live ring). The
+first cycle starts on 12 V alone, **before the power button is pressed**, and
+pressing it changes nothing. Screen black and button backlight off throughout.
+
+**Power-up, alone on the bus.** Captured with cangaroo from the moment 12 V was
+applied. The unit sends exactly one identifier:
+
+```
+t (s)    ID   DLC  data
+0.000    436  6    16 02 C0 04 00 00      alive  (I have (re)started)
+0.050    436  6    16 01 00 00 00 00      ring → node 16 (itself)
+0.190    436  6    16 02 C0 04 00 00      } repeats every ~190 ms,
+0.240    436  6    16 01 00 00 00 00      } five times in all
+...
+0.760    436  6    16 02 C0 04 00 00
+1.260    436  6    16 04 00 00 00 00      limp-home, every 500 ms, indefinitely
+```
+
+This is VAG OSEK network management:
+
+| field | reading | status |
+|---|---|---|
+| ID | `0x420 + node`, so the unit is **node `0x16`** | established: a peer at `0x420` is addressed as node `0x00` |
+| byte 0 | logical successor: who the ring goes to next | established |
+| byte 1 | **`02` alive, `01` ring, `04` limp-home** | established by the working ring below |
+| bytes 2–3 | `C0 04` in the boot-time alive frames only | meaning unknown; zeros work for a peer |
+
+> **Correction.** An earlier revision of this section had `01` = alive and
+> `02` = ring, following the usual OSEK write-ups. A responder built on that
+> reading kept restarting the unit. Under it, handing the ring back looked like
+> announcing a restart. The swapped reading is the one that holds a ring.
+
+Alone, the unit announces itself, rings itself, never gets the ring back (a CAN
+controller does not receive its own frames), and after five tries settles in
+**limp-home**.
+
+**A working ring — established.** As node `0x00` (ID `0x420`), a peer must:
+
+1. **announce whenever the unit restarts.** The unit forgets its peers each
+   time it sends alive. Sending `16 02 00 00 00 00` right after that alive makes
+   its next ring name us. A single announcement at start-up is not enough.
+2. **pass the ring back** `16 01 00 00 00 00` about 50 ms after each
+   `00 01 …` from the unit.
+3. **announce again** if the unit falls back to limp-home or the ring goes
+   quiet.
+
+With that, the unit rings node `0x00` every 100 ms. Over a 60 s hold it sent
+594 rings, with one restart of the unit's NM at 45.9 s — a turn of the boot
+loop — that the responder recovered from within 100 ms.
+
+**Even with the ring up, the unit sends nothing else.** With a live NM peer and
+`0x271` = `01 80` for 60 s, the only identifier from the unit was `0x436`. No
+status frames, no `0x635`, no application traffic of any kind. The natural
+reading is that each boot cycle gets as far as bringing up NM and no further:
+the application that would send status frames, and act on `0x635`, never
+starts. The guided session repeated this with `0x635` at `00 00 00`, `64 64 00`,
+`00 FF 00` and `FF FF FF` for 8 s each: no new identifiers, button backlight off
+throughout. **So a null result for `0x635` on this unit says nothing about
+`0x635` itself.** T6 needs a unit whose application runs.
+
+**What "keeping the unit awake" means now.** §4 and T5 assumed a few periodic
+application frames. On this unit the NM layer at least is gated on **a live NM
+peer**. The periodic set from `audi-can-rpi` could never have supplied that: it
+is a receive filter, and the NM range is not in it.
+
+Tools:
+
+- `uv run src/rnse/can_session.py`: a guided bench session. It prompts for each
+  physical step, runs the NM peer and `0x271` itself, tries the `0x635` values,
+  and logs every frame plus the operator's answers to `captures/`.
+- `uv run src/rnse/can_backlight.py`: interactive console (`nm on`, `ign on`,
+  `on` / `off` / `level`, `status`).
+
 ---
 
 ## 5. The 30-minute shutdown — and what it does *not* tell us
@@ -370,9 +475,11 @@ The shutdown is naturally read as "30 minutes without CAN activity, therefore
 battery protection." That reading is probably right, but it is **not what was
 observed**.
 
-CAN has never been present on this bench. So "30 minutes with no CAN" and
-"30 minutes since power-on" are, so far, the same experiment. A plain idle timer
-that fires regardless of bus traffic would produce an identical result.
+CAN has never been kept alive on this bench for 30 minutes. So "30 minutes
+with no CAN" and "30 minutes since power-on" are, so far, the same experiment.
+A plain idle timer that fires regardless of bus traffic would produce an
+identical result. (§4.1 adds a third reading: the timer may be gated on NM, on
+whether the unit has a peer, rather than on traffic as such.)
 
 Which it is has a direct consequence: if the timeout is CAN-gated, traffic keeps
 the unit awake and the bench session becomes unlimited. If it is a plain idle
@@ -480,9 +587,21 @@ wiring and the pinout in one observation, and confirms its CAN controller is
 alive. **Listen before you transmit**; a transmitting node on a misconfigured
 bitrate produces error frames, not silence.
 
+> **Result (2026-09-25): passed.** The unit transmits `0x436` from power-on,
+> received at 100 kbit/s with zero errors, and it acknowledges frames sent from
+> the host. The bus is low-speed fault-tolerant CAN and must **not** be
+> terminated with 120 Ω (§2.2). The traffic is network management, and the unit
+> sits in limp-home until a second node answers (§4.1). The unit was the
+> **bricked** one. That makes this partial T2 evidence: it powers up and
+> boot-loops, but its CAN controller and NM layer run throughout.
+
 **T5 — defeat the 30-minute shutdown.** Power on with the button, then transmit
 `0x271` = `01 80` at 100 ms and wait it out. If the unit shuts down anyway,
 escalate to the full periodic set from §4 and repeat.
+
+> **Revised after T4.** Run T5 with a live NM peer (`nm on`, §4.1) as well as
+> `0x271`. The periodic set from §4 is now the fallback's fallback: a unit in
+> limp-home is unlikely to be counting application frames at all.
 
 **Success criterion: the unit is still on at 35 minutes.** This is the best test
 in the document that costs nothing but time. It is binary, it needs no
@@ -525,6 +644,7 @@ The value of T6 is that every outcome is informative, including the null ones.
 | new frame on panel RX, same payload at every level | on/off only; the head unit is thresholding, and the panel has no brightness control |
 | LEDs track the sweep but panel RX stays silent | the elimination argument in `BACKLIGHT.md` §8 is **wrong**. There is a path to `N_NBASE` that does not come from the MCU, and the connector pinout is incomplete |
 | nothing changes anywhere, unit otherwise alive | either `0x635` is not this unit's illumination ID, or the brick has taken the illumination task with it. T3's no-CAN default says which is more likely |
+| unit stays in limp-home (`0x436` byte 1 = `04`) while `0x635` is sent | not a verdict on `0x635`. The unit believes it is alone (§4.1); get the NM ring up first, then repeat |
 | T5 failed — unit still shuts down at 30 min | do not run T6 yet. Either nothing is reaching the unit, or the timer is not CAN-gated; T4 says which, and the first case invalidates any T6 null result |
 
 The third row is the one to watch for. It would be an unwelcome result, but it
@@ -583,7 +703,8 @@ backlight question; it puts a fluent speaker of the protocol on the wire.
 
 ## 10. Open questions
 
-Reordered after the bench observations in §3 and §5.
+Reordered after the bench observations in §3 and §5. Updated after T4
+(2026-09-25).
 
 1. ~~Did the panel backlight light when the unit was powered on by the button
    with no CAN present?~~ **ANSWERED — no.** The unit booted to the PIN entry
@@ -594,23 +715,33 @@ Reordered after the bench observations in §3 and §5.
    outside. (§3, T3b)
 3. **Does the bricked unit still do any of this?** Every behaviour in §5 was
    recorded before the failed update. The go/no-go has not been run. (T2)
-4. **Is the 30-minute shutdown CAN-gated, or a plain idle timer?** Not yet
-   distinguishable: CAN has never been present on this bench, so "30 minutes
-   without traffic" and "30 minutes since power-on" are the same experiment so
-   far. (§5, T5)
-5. **Does the unit answer on K-Line (B5)?** Independent of everything else here,
+4. ~~Does the NM ring form?~~ **ANSWERED — yes** (§4.1), with node `0x00` and
+   `02` = alive, `01` = ring. **Still open: does the unit act on `0x635` once
+   it has?** On the bricked, boot-looping unit it sends no application traffic
+   at all with the ring up, so this needs a unit whose application boots.
+5. **Is the 30-minute shutdown CAN-gated, NM-gated, or a plain idle timer?** Not
+   yet distinguishable: CAN has never been kept alive for 30 minutes on this
+   bench. (§5, T5)
+6. **Does the unit answer on K-Line (B5)?** Independent of everything else here,
    and the only other channel into it. (§2)
-6. What is the standby current, the running current, and is the time to
+7. What is the standby current, the running current, and is the time to
    shutdown repeatable to the minute? (T2)
-7. What is the minimum set of periodic frames that keeps the unit awake? (T5)
-8. Does the unit terminate the CAN bus internally? Measure D9 / D10 unpowered.
-9. Is `0x635` the correct identifier for this unit's illumination, and is byte 1
+8. What is the minimum set of frames that keeps the unit awake: an NM peer
+   alone, or NM plus `0x271`? (T5, §4.1)
+9. ~~Does the unit terminate the CAN bus internally?~~ **ANSWERED — wrong
+   question.** The bus is low-speed fault-tolerant CAN (§2.2). Each node
+   terminates its own wires, and a 120 Ω load across the pair stops all
+   communication.
+10. ~~Does the unit start transmitting `0x436` on 12 V alone?~~ **ANSWERED —
+    yes**, about 0.3 s after power is applied, with no button press (§4.1). On
+    the bricked unit, at least.
+11. Is `0x635` the correct identifier for this unit's illumination, and is byte 1
    really the button backlight? (T6)
-10. Is the value range `0x00..0x64`, or does `0xFF` mean something? (T6)
-11. Is the backlight command graded or binary? (T6, T8)
-12. What does the head unit say to the panel during boot, and does it
+12. Is the value range `0x00..0x64`, or does `0xFF` mean something? (T6)
+13. Is the backlight command graded or binary? (T6, T8)
+14. What does the head unit say to the panel during boot, and does it
     acknowledge key and rotary messages? (T3)
-13. Is `0x461` — "RNS-E button controls" on the vehicle bus — related in any way
+15. Is `0x461` — "RNS-E button controls" on the vehicle bus — related in any way
     to the `0x0C` key bitmap on the panel link, or merely adjacent?
 
 ---
