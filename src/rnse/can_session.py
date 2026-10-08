@@ -46,12 +46,16 @@ from can_backlight import (  # noqa: E402
 ILLUM_PERIOD = 0.2
 
 # 0x635 payloads tried in the backlight step, with what each one is testing.
+# Ranges from the firmware (FIRMWARE.md §5.2.1): byte 0 is valid 0x06..0x7E,
+# byte 1 (KL58s) 0x00..0x7E, both used up to 0x64; byte 2 is never read. An
+# invalid byte is replaced by the last good value or 0x50, not treated as off.
 ILLUM_TESTS = [
-    ("00 00 00", "everything off (the baseline)"),
-    ("64 64 00", "display and buttons at the stated maximum, 0x64"),
-    ("00 FF 00", "the 'lights on' value reported online"),
-    ("FF FF FF", "every byte at maximum"),
-    ("00 00 00", "back to off"),
+    ("06 00 00", "lowest valid levels (the baseline)"),
+    ("64 64 00", "display and KL58s at the maximum, 0x64"),
+    ("06 64 00", "KL58s alone at maximum: does it drive the button lights?"),
+    ("64 00 00", "display alone at maximum"),
+    ("00 FF 00", "both bytes invalid: expect a fallback, not 'lights on'"),
+    ("06 00 00", "back to the lowest"),
 ]
 
 

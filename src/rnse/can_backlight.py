@@ -4,8 +4,8 @@
 """
 Interactive CAN console for the RNS-E illumination experiment (docs/CANBUS.md).
 
-Transmits the third-party illumination frame 0x635 and, optionally, the
-ignition keep-alive 0x271, and shows what the head unit says back.
+Transmits the illumination frame 0x635 and, optionally, the ignition
+keep-alive 0x271, and shows what the head unit says back.
 
     uv run src/rnse/can_backlight.py              # can0, 0x635 every 200 ms
     uv run src/rnse/can_backlight.py --channel can1 --period 100
@@ -18,14 +18,19 @@ Other programs (cangaroo, candump) can stay attached to the same interface;
 SocketCAN delivers our transmitted frames to them too, so a capture running
 alongside records exactly what was sent and when.
 
-Everything about 0x635's payload is UNVERIFIED (CANBUS.md §3):
+0x635's payload as the firmware handles it (FIRMWARE.md §5.2.1, traced in V574
+code, not yet seen to work on hardware):
 
-    [0]  display backlight   0x00 .. 0x64
-    [1]  button backlight    0x00 .. 0x64
-    [2]  unknown
+    [0]  display   valid 0x06 .. 0x7E, used up to 0x64
+    [1]  KL58s     valid 0x00 .. 0x7E, used up to 0x64; drives the third
+                   panel channel (button backlight: likely, not proven)
+    [2]  not read
 
-Values up to 0xFF are allowed on purpose, since settling the range is one of
-the things this tool is for. Type `help` at the prompt for commands.
+An out-of-range byte is not "off": the unit swaps in the last good value or
+a default of 0x50, and byte 1 also logs `KL58S ERROR`. So `00 xx xx` does not
+turn the display down, and 0xFF is a fault, not "lights on". Values up to
+0xFF are still allowed here on purpose, to exercise that path. Type `help` at
+the prompt for commands.
 """
 
 import argparse
@@ -38,15 +43,17 @@ import time
 import can
 
 # --------------------------------------------------------------------------
-# Identifiers (CANBUS.md §3, §4 — third-party, unverified)
+# Identifiers (0x635: FIRMWARE.md §5.2.1; 0x271: CANBUS.md §4, unverified)
 # --------------------------------------------------------------------------
 
-ILLUM_ID = 0x635            # [display, button, unknown]
+ILLUM_ID = 0x635            # [display, KL58s, unused], DLC 3
 IGNITION_ID = 0x271         # terminal 15
 IGNITION_ON = bytes([0x01, 0x80])
 IGNITION_PERIOD = 0.100
 
-LEVEL_MAX = 0x64            # stated top of range; 0xFF also seen in the wild
+LEVEL_MAX = 0x64            # the unit clamps both bytes to 100
+DISPLAY_MIN = 0x06          # byte 0 below this is invalid and replaced
+VALID_MAX = 0x7E            # above this, either byte is invalid and replaced
 
 # The head unit's own frame, seen on every power-up (boot-up.asc): VAG OSEK
 # network management. ID 0x420 + node, so the unit is node 0x16; byte 0 =
@@ -87,6 +94,16 @@ def parse_byte(text):
     if not 0 <= v <= 0xFF:
         raise ValueError(f"{text!r} is outside 0..255")
     return v
+
+
+def invalid_note(payload):
+    """Flags bytes the unit rejects and replaces (FIRMWARE.md §5.2.1)."""
+    bad = []
+    if not DISPLAY_MIN <= payload[0] <= VALID_MAX:
+        bad.append("display invalid → unit keeps last good / 0x50")
+    if payload[1] > VALID_MAX:
+        bad.append("KL58s invalid → KL58S ERROR, fallback")
+    return f"  [{'; '.join(bad)}]" if bad else ""
 
 
 def describe_nm(data):
@@ -249,7 +266,7 @@ class Console(cmd.Cmd):
         print(f"[tx] 0x{ILLUM_ID:03X} {hexbytes(msg.data)} "
               f"every {self.period * 1000:.0f} ms  "
               f"(display={self.payload[0]} button={self.payload[1]} "
-              f"b2=0x{self.payload[2]:02X})")
+              f"b2=0x{self.payload[2]:02X}){invalid_note(self.payload)}")
 
     def _stop_illum(self):
         if self.illum_task is not None:
@@ -286,9 +303,11 @@ class Console(cmd.Cmd):
         self._apply()
 
     def do_off(self, line):
-        """off — send 00 00 on display and button (byte 2 unchanged)."""
+        """off — send the lowest valid levels, 06 00 (byte 2 unchanged).
+        00 is not off for the display: the unit treats it as invalid and
+        keeps the last good value. `raw 00 00 00` still sends it."""
         self._stop_sweep()
-        self.payload[0:2] = [0x00, 0x00]
+        self.payload[0:2] = [DISPLAY_MIN, 0x00]
         self._apply()
 
     def _set(self, idx, line, usage):
@@ -311,11 +330,11 @@ class Console(cmd.Cmd):
         self._set([0], line, "display N")
 
     def do_button(self, line):
-        """button N — set byte 1 (front-panel button backlight) only."""
+        """button N — set byte 1 (KL58s, likely the button backlight) only."""
         self._set([1], line, "button N")
 
     def do_b2(self, line):
-        """b2 N — set byte 2 (meaning unknown)."""
+        """b2 N — set byte 2 (the firmware never reads it)."""
         self._set([2], line, "b2 N")
 
     def do_raw(self, line):

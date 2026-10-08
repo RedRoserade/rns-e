@@ -279,9 +279,18 @@ its own and is unaffected by lock state — but it does mean the negative is not
 clean, and the CAN-origin claim rests more on the elimination than on this
 observation. **T3b resolves it for the cost of typing four digits.**
 
-### `0x635` — the illumination message — **third-party, unverified**
+### `0x635` — the illumination message — **confirmed in firmware, untested on hardware**
 
 The single most useful identifier for this project.
+
+**Update (2026-10-08):** traced in the V574 firmware (`FIRMWARE.md` §5.2.1).
+The unit registers `0x635` with a length of 3. Byte 0 is the display level
+(valid 0x06–0x7E). Byte 1 is **KL58s** (valid 0x00–0x7E; above that it logs
+`KL58S ERROR`). Both are clamped to 100. Byte 2 is never read. An invalid
+byte is replaced by the last good value or 0x50, so **`00` is not "off" for
+byte 0, and `FF` is a fault, not "lights on"**. The text below is the original
+third-party description, kept for the record. It is still unknown whether the
+bench unit runs V574 firmware, and whether byte 1 drives the button lights.
 
 ```
 ID   0x635

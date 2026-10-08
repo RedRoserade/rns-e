@@ -4,7 +4,8 @@
 // RNS-E front panel listener.
 //
 // Brings the board up properly, decodes its messages, and streams them to the
-// PC over USB. Optionally sends an acknowledgement back to the panel.
+// PC over USB. Optionally sends an acknowledgement back to the panel, and can
+// send the head unit's backlight frame (ADDR 0x06, docs/FIRMWARE.md §5.2.1).
 //
 // ---------------------------------------------------------------------------
 // Why the board link is bit-banged
@@ -40,6 +41,11 @@
 //   r   reset the panel (low, pause, high)
 //   a   toggle ACK sending
 //   s   print status
+//   b   send the backlight frame with the current A/B/C
+//   +   raise A/B/C by 1/10 of each period, then send
+//   -   lower A/B/C by 1/10 of each period, then send
+//   D A B C<newline>
+//       set A/B/C and send. Decimal or 0x hex, e.g. `D 0xAC7 0x4D8 0x1838`
 //   ?   help
 
 #include <Arduino.h>
@@ -72,6 +78,22 @@
 
 #define MAXMSG        32
 
+// --------------------------------------------------------- backlight frame --
+// Traced from the head unit's firmware (V574 OSM, fp_send_dim_frame at
+// 0x8060530C), never observed on the wire:
+//
+//   06 0E  A  B'  C  A'  B  C'  CK      each value u16 big-endian
+//   A' = PERIOD_A - A,  B' = PERIOD_B - B,  C' = PERIOD_C - C
+//
+// The head unit derives B from 0x635 byte 0 (display) and C from byte 1
+// (KL58s); A also comes from byte 0. Which panel output each channel drives,
+// and in which direction, is not known -- that is what this is for. Values are
+// capped at the period, as the head unit caps them. Defaults: half of each.
+#define DIM_ADDR      0x06
+#define PERIOD_A      0x158E
+#define PERIOD_B      0x09B0
+#define PERIOD_C      0x3070
+
 // -------------------------------------------------------------- bit timing --
 // 9600 baud = 104.1667 us/bit. The constants below are the nominal values
 // minus measured loop overhead. Sampling is mid-bit, so there is +/-52 us of
@@ -87,6 +109,8 @@
 #define TX_SET(v)     do { if (v) PORTD |= _BV(PIN_TX); else PORTD &= ~_BV(PIN_TX); } while (0)
 
 static bool ackEnabled = ACK_DEFAULT;
+static const uint16_t dimPeriod[3] = { PERIOD_A, PERIOD_B, PERIOD_C };
+static uint16_t dimVal[3] = { PERIOD_A / 2, PERIOD_B / 2, PERIOD_C / 2 };
 static unsigned long msgCount = 0, errCount = 0;
 
 // ------------------------------------------------------------ software UART --
@@ -169,6 +193,79 @@ static uint8_t ack_for(const uint8_t *m, uint8_t n, uint8_t *out) {
   return 3;
 }
 
+static void put_u16(uint8_t *p, uint16_t v) {
+  p[0] = v >> 8;
+  p[1] = v & 0xFF;
+}
+
+static void print_hex(const uint8_t *b, uint8_t n) {
+  for (uint8_t i = 0; i < n; i++) {
+    if (b[i] < 0x10) Serial.print('0');
+    Serial.print(b[i], HEX);
+    if (i + 1 < n) Serial.print(' ');
+  }
+}
+
+static void send_dim() {
+  uint8_t f[15];
+  f[0] = DIM_ADDR;
+  f[1] = 0x0E;                               // LEN: 12 payload bytes
+  put_u16(&f[2],  dimVal[0]);
+  put_u16(&f[4],  PERIOD_B - dimVal[1]);
+  put_u16(&f[6],  dimVal[2]);
+  put_u16(&f[8],  PERIOD_A - dimVal[0]);
+  put_u16(&f[10], dimVal[1]);
+  put_u16(&f[12], PERIOD_C - dimVal[2]);
+  f[14] = checksum(f, 14);
+  panel_write(f, sizeof f);
+
+  Serial.print("TX ");
+  Serial.print(millis());
+  Serial.print(' ');
+  print_hex(f, sizeof f);
+  Serial.print("  A=0x"); Serial.print(dimVal[0], HEX);
+  Serial.print(" B=0x");  Serial.print(dimVal[1], HEX);
+  Serial.print(" C=0x");  Serial.println(dimVal[2], HEX);
+}
+
+// Step every channel by a tenth of its period, clamped to 0..period.
+static void step_dim(int8_t dir) {
+  for (uint8_t i = 0; i < 3; i++) {
+    int32_t v = (int32_t)dimVal[i] + dir * (int32_t)(dimPeriod[i] / 10);
+    if (v < 0) v = 0;
+    if (v > dimPeriod[i]) v = dimPeriod[i];
+    dimVal[i] = v;
+  }
+  send_dim();
+}
+
+// `D A B C`: the D has been read; parse the rest of the line.
+static void read_dim_line() {
+  char line[40];
+  uint8_t n = Serial.readBytesUntil('\n', line, sizeof line - 1);
+  line[n] = '\0';
+  char *p = line;
+  uint32_t v[3];
+  for (uint8_t i = 0; i < 3; i++) {
+    char *end;
+    v[i] = strtoul(p, &end, 0);
+    if (end == p) {
+      Serial.println("# usage: D A B C   (decimal or 0x hex)");
+      return;
+    }
+    p = end;
+  }
+  for (uint8_t i = 0; i < 3; i++) {
+    if (v[i] > dimPeriod[i]) {
+      Serial.print("# capped to period: ");
+      Serial.println(dimPeriod[i]);
+      v[i] = dimPeriod[i];
+    }
+    dimVal[i] = v[i];
+  }
+  send_dim();
+}
+
 static void report(const uint8_t *m, uint8_t n, bool parityClean) {
   bool lenOk = (n >= 3) && ((m[1] + 1) == n);
   bool ckOk  = (n >= 3) && (checksum(m, n - 1) == m[n - 1]);
@@ -176,11 +273,7 @@ static void report(const uint8_t *m, uint8_t n, bool parityClean) {
   Serial.print("MSG ");
   Serial.print(millis());
   Serial.print(' ');
-  for (uint8_t i = 0; i < n; i++) {
-    if (m[i] < 0x10) Serial.print('0');
-    Serial.print(m[i], HEX);
-    if (i + 1 < n) Serial.print(' ');
-  }
+  print_hex(m, n);
   Serial.print(lenOk ? " LEN=ok" : " LEN=BAD");
   Serial.print(ckOk ? " CK=ok" : " CK=BAD");
   Serial.print(parityClean ? " PAR=ok" : " PAR=BAD");
@@ -194,11 +287,7 @@ static void report(const uint8_t *m, uint8_t n, bool parityClean) {
     uint8_t an = ack_for(m, n, a);
     panel_write(a, an);
     Serial.print("ACK ");
-    for (uint8_t i = 0; i < an; i++) {
-      if (a[i] < 0x10) Serial.print('0');
-      Serial.print(a[i], HEX);
-      if (i + 1 < an) Serial.print(' ');
-    }
+    print_hex(a, an);
     Serial.println();
   }
 }
@@ -229,12 +318,16 @@ static void reset_panel() {
 
 static void help() {
   Serial.println("# commands: r=reset  a=toggle ack  s=status  ?=help");
+  Serial.println("# backlight: b=send  +/-=step  D A B C=set+send (0x06 frame)");
 }
 
 static void status() {
   Serial.print("# ack=");    Serial.print(ackEnabled ? "on" : "off");
   Serial.print(" messages="); Serial.print(msgCount);
   Serial.print(" errors=");   Serial.println(errCount);
+  Serial.print("# dim A=0x"); Serial.print(dimVal[0], HEX);
+  Serial.print(" B=0x");      Serial.print(dimVal[1], HEX);
+  Serial.print(" C=0x");      Serial.println(dimVal[2], HEX);
 }
 
 // -------------------------------------------------------------------- main --
@@ -261,6 +354,10 @@ void loop() {
       case 'r': msgLen = 0; reset_panel(); break;
       case 'a': ackEnabled = !ackEnabled; status(); break;
       case 's': status(); break;
+      case 'b': send_dim(); break;
+      case '+': step_dim(+1); break;
+      case '-': step_dim(-1); break;
+      case 'D': read_dim_line(); break;
       case '?': help(); break;
       default: break;
     }
