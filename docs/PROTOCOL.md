@@ -5,9 +5,12 @@ MB90561A. The panel connects to the main unit over a 9-pin connector and
 speaks a simple checksummed serial protocol.
 
 Status: transport, frame format, the boot handshake, and the full input map
-(18 buttons + 2 rotaries) are **established**. What the panel *receives* —
-display, backlight, acknowledgements — is almost entirely unknown. Each claim
-below is marked with its confidence.
+(18 buttons + 2 rotaries) are **established**. Since 2026-10-10 so is the
+link layer from the head unit's side: the panel accepts the `0x15` ACK, which
+stops its retries (§6), and ACKs all five init frames from the head unit's
+firmware (§7). What the panel *does* with the dimmer (`0x06`) and lamp
+(`0x07`) frames is not yet known. Each claim below is marked with its
+confidence.
 
 ---
 
@@ -76,7 +79,9 @@ larger values disambiguate it.
 
 **Firmware cross-check (`FIRMWARE.md` §5.5).** The head unit's receive code
 confirms all four rows and names more. Every address below comes from
-disassembly; none has been seen on the wire.
+disassembly. On the bench (2026-10-10), the panel accepted `0x15` as the ACK
+and ACKed the init frames `0x02`, `0x03`, `0x0A`, `0x09` and `0x06` (§7);
+the rest have not been sent.
 
 | direction | ADDR | LEN | from firmware |
 |---|---|---|---|
@@ -212,7 +217,14 @@ Every state change is sent **exactly 4 times**, then silence:
 Response latency to a received byte is 1.16–1.23 ms. A byte occupies 1.146 ms
 at 9600 8E1, so the panel replies within ~50 µs of the stop bit.
 
-### The 4× repeat is probably a retry (INFERRED, not proven)
+### The 4× repeat is a retry — **established** (2026-10-10)
+
+With the listener answering every valid report with the bare byte `0x15`,
+every key and rotary report was sent **once**
+(`captures/2026-10-10-listener-proper.srzip`, `…-listener-init.srzip`). The
+`0x15` went out 2–3 ms after the report ended. So the panel repeats until
+ACKed, gives up after 4 tries, and the ACK is `0x15`, as the firmware says.
+The reasoning that led here, kept for the record:
 
 Repeating an *absolute* bitmap 4× is harmless. Repeating a *relative* rotary
 delta 4× would quadruple the movement if the receiver summed them. The most
@@ -343,6 +355,15 @@ So state B is very likely **waiting for a reply of its own**. Finding it needs
 a two-stage probe: `0x16`, then a candidate sent after the 258 ms transition
 completes. `handshake/handshake.ino` takes a `STEPS[]` list for exactly this.
 
+**Bench result (2026-10-10): a frame straight after `0x16` does not avoid
+state B.** The listener answered `0F 02 11` with `16` followed at once by the
+first init frame `02 0C … 7D` (`captures/2026-10-10-listener.srzip`). The panel
+did not ACK it. About 273 ms after that frame, and after each of two
+retransmits, it sent `18 03 80 9B`. After the last retransmit it settled into
+the 53.6 ms broadcast. The same frame after a bare `0x15` was ACKed at once
+(below). So in this state the panel does not take `0x16` as "ACK + frame
+follows", whatever the head unit's own code does with it.
+
 ### This resolves the "258 ms latency" anomaly
 
 Earlier notes recorded an unexplained 258 ms reply latency in
@@ -359,6 +380,35 @@ reset LOW  ->  reset HIGH
                panel stops broadcasting, enters normal edge-driven operation
                (silent until a key or rotary changes)
 ```
+
+### The head unit's init sequence — **accepted by the panel** (2026-10-10)
+
+After the `0x15`, the listener sent the five init frames from the head unit's
+firmware (`FIRMWARE.md` §5.5), each after the previous one was ACKed. The
+panel answered every one with `0x15` within ~1 ms of its last byte
+(`captures/2026-10-10-listener-init.srzip`):
+
+```
+0.559  panel  0F 02 11
+0.565  HU     15
+0.586  HU     02 0C 40 1D 4B 42 40 00 40 01 FF 05 7D         panel 15
+       HU     03 0F 3C 0A 02 0A 04 0A 04 0A 04 0A 04 0A 0A A6 panel 15
+       HU     0A 07 00 FF 1C FF 1C 47                         panel 15
+       HU     09 06 00 00 0F 06 24                            panel 15
+       HU     06 0E 00 00 00 00 30 70 00 00 00 00 00 00 B4    panel 15
+```
+
+A 20 ms pause between the `0x15` and the first frame was used; whether it is
+needed is untested. Afterwards keys and rotaries reported normally, once each.
+These are the **first head-unit → panel frames confirmed on the wire.** What
+they configure is still unknown; nothing visible changed, but the LED rail was
+not fed.
+
+(In that capture, the listener retransmitted frames 2–5 once each although the
+panel had ACKed them. That was the Arduino misreading the ACK while its USB
+serial interrupt was busy, not the panel. With bytes read with interrupts off,
+every frame is ACKed on the first try and the whole init takes 120 ms, from
+`0F 02 11` to the last ACK: `captures/2026-10-10-listener3.srzip`.)
 
 ---
 
@@ -493,7 +543,7 @@ worth putting on the logic analyzer next time the panel is on the bench.
 | `src/rnse/rnse.py` | decode a sigrok `.sr` capture → frames, messages, key/rotary mapping. stdlib only |
 | `src/rnse/map_buttons.py` | guided button/rotary mapping over the listener's serial output; writes `keymap.json` + `keymap.md` |
 | `arduino/fuzzer/fuzzer.ino` | byte sweep with proper reset sequencing and a marker channel |
-| `arduino/listener/listener.ino` | boot the board, decode messages, stream to USB; optional ACK |
+| `arduino/listener/listener.ino` | boot the board, decode messages, stream to USB; optional head-unit link layer (init frames, `0x15` ACK, NAK, retransmit) and the `0x06` backlight frame |
 | `arduino/handshake/handshake.ino` | dumb two-stage probe: reset, wait, send `STEPS[]`, observe on the LA |
 | `docs/keymap.json` | the mapping in §4/§5, machine-readable |
 
@@ -506,16 +556,15 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
 
 1. ~~What ends the `0x0F` announce phase?~~ **SOLVED** — sending `0x15`, and
    `0x15` specifically: `0x14` is ignored, `0x16` leads elsewhere. See §7.
-2. Does an ACK stop the 4× key/rotary retry, and what is its format?
-   **Format answered by the firmware: the bare byte `0x15`, the same byte that
-   ACKs the boot announcement** (§6 cross-check). That it stops the retry
-   still needs a capture.
+2. ~~Does an ACK stop the 4× key/rotary retry, and what is its format?~~
+   **SOLVED** — the bare byte `0x15`. Each report is then sent once (§6).
 3. ~~Why is reply latency 1.2 ms in one state and 258 ms in another?~~
    **RESOLVED** — 258 ms is the state-B transition delay, not a latency.
 4. **What reply resolves state B** (the `18 03 80 9B` broadcast)? The
-   firmware says `0x16` means "ACK, a frame follows" (§7). So the likely
-   answer is to send a valid frame straight after `0x16`, or to ACK the
-   `0x18` with `0x15`.
+   firmware says `0x16` means "ACK, a frame follows" (§7). **A valid frame
+   straight after `0x16` does not help** (§7, 2026-10-10). Still untried:
+   ACKing the `0x18` with `0x15`, and sending a frame after the 258 ms
+   transition.
 5. How large is the command space around `0x14`/`0x15`/`0x16`, and what do the
    other values do?
 6. Why does the panel answer only every 2nd–3rd byte regardless of byte gap?
@@ -541,7 +590,9 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
 14. **Nothing has ever been sent *to* the display.** Every message decoded so
     far travels panel → head unit. **The firmware now supplies the other
     half** (§3 cross-check): the init sequence, the dimmer (`0x06`) and the
-    softkey lamps (`0x07`). None of it has been tried on the panel yet.
+    softkey lamps (`0x07`). **The init sequence is accepted** (§7). What the
+    dimmer and lamp frames do, with the LED rail fed, is next
+    (`NEXT.md`).
 15. **What does PPG1 (connector pin 5) carry?** It is a hardware PWM output
     from the MB90561A and has never been captured. Put it on the logic analyzer
     and see whether it is idle, free-running, or modulated by anything.

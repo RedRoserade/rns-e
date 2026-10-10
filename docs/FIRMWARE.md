@@ -465,6 +465,13 @@ HU     09 06 …  24    panel 15
 HU     06 0E …  B4    panel 15       init done
 ```
 
+**Bench result (2026-10-10).** Sent from the Arduino listener, the panel ACKed
+all five frames with `0x15` (`PROTOCOL.md` §7). Two differences from the
+head unit's own rules: the first frame went after a bare `0x15` and a 20 ms
+pause, because `0x16` + frame put the panel in state B and it never ACKed;
+and the ACK to the panel's reports is a bare `0x15`, which stops its 4×
+retry.
+
 What the payloads of `0x02`, `0x03`, `0x09` and `0x0A` configure is not known.
 **Inference:** `0x03` (`3C 0A 02 0A 04 0A …`) looks like timing parameters,
 perhaps key repeat or debounce.

@@ -210,12 +210,11 @@ Every state change is sent exactly 4 times at ~59 ms, then silence.
 Ordered roughly by how much they unblock. The full list, with the evidence
 behind each, is §11 of [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-1. **The acknowledgement format (and if it needs any).** Each message repeating exactly 4× then
-   stopping looks like an unacknowledged retry, and repeating a _relative_
-   rotary delta 4× would be actively wrong if the receiver summed it — so an
-   ACK almost certainly exists. Nothing has ever been observed replying to the
-   panel. `listener.ino` has a guessed ACK behind a toggle; the test is whether
-   the repeat count drops below 4.
+1. ~~**The acknowledgement format (and if it needs any).**~~ **Solved
+   (2026-10-10):** the bare byte `0x15`, as the head unit's firmware says
+   (`docs/FIRMWARE.md` §5.5). With `listener.ino` sending it, each key and
+   rotary report goes out once instead of 4×. The panel also ACKs the head
+   unit's five init frames (`docs/PROTOCOL.md` §7).
 2. **What resolves "state B."** Sending `0x16` at boot puts the panel into a
    second waiting state that broadcasts `18 03 80 9B` every 53.6 ms while
    ignoring input — structurally identical to the boot announcement, so it is
