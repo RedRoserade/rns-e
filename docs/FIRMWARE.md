@@ -8,8 +8,10 @@ Companion to `PROTOCOL.md` (the panel serial link), `BACKLIGHT.md` (the LED
 driver chain) and `CANBUS.md` (driving the head unit over CAN).
 
 **Status. The layout, the module header, the checksum and the load addresses
-are established (§3.3). One code path has been traced by disassembly (§5.2.1):
-CAN `0x635` → KL58s check → the front-panel frame `ADDR 0x06`.** Everything
+are established (§3.3). Three code paths have been traced by disassembly:
+CAN `0x635` → KL58s check → the front-panel frame `ADDR 0x06` (§5.2.1); the
+panel link's ACK/NAK, init sequence and full address set (§5.5); and the
+softkey indicator lamps, screen → `ADDR 0x07` (§5.6).** Everything
 else comes from reading the files: headers, directory tables, checksums,
 `strings` and literal-pool pointers. Where a claim goes past what the bytes or
 the disassembly say, it is marked as an inference. Nothing here has been tested
@@ -389,6 +391,141 @@ Other CAN infrastructure strings: `CAN_MainTask`, `CAN_TXRING_OVER` (loader);
 `[CAN]Can RingBuffer Overflow`, `[CAN]CAN_TpOpn is called!!` (a transport
 protocol), `TELCAN_TSK`, `[RVC] CAN` (OSM); `AMI_BAPERR_LOG` (BAP).
 
+### 5.5 The panel link from the head unit's side
+
+Traced in Ghidra on V574 `OSM`, like §5.2.1. Names are the labels saved by
+`scripts/LabelFp.java`. **Everything in this section comes from disassembly.
+None of it has been sent to a panel yet.**
+
+**Link layer — established.** The FPDRV task near 0x80555000 owns the UART.
+
+- **ACK.** For every valid panel frame, `fpdrv_send_ack` (0x805556DC) sends
+  the bare byte **`0x15`**. If the head unit has a frame queued, it sends
+  **`0x16` followed by that frame** instead, so the ACK and the next command go
+  out together.
+- **The head unit expects the same from the panel.** In `fpdrv_rx_loop`
+  (0x80555424), a received `0x15` is treated as the ACK of the last frame sent,
+  and a received `0x18` frame as a NAK, which leads to a retransmit.
+- **Timeout.** Every frame except bare `0x15`/`0x18` starts a 300 ms reply
+  timer. After 3 failures the head unit sends `00 03 2E 31`
+  (`fpdrv_send_resync`). If that also fails, it hard-resets the panel. This is
+  the `[FPDRV] fpdrv hard reset` string.
+- **NAK.** `fpdrv_send_nak` sends `18 03 <flags> CK`. The flags come from
+  `fpdrv_rx_validate` (0x80556B68):
+
+  | flag | meaning on the head-unit side |
+  |---|---|
+  | `0x01` | checksum wrong |
+  | `0x04` | ADDR is one the panel must not send (see below), or ≥ 0x13 |
+  | `0x40` | LEN does not match the table below |
+  | `0x80` | valid frame, but no handler for its ADDR (`fpdrv_rx_dispatch`) |
+
+**Panel → head unit — established.** The validator's length table, together
+with the dispatcher:
+
+| ADDR | LEN | head unit does |
+|---|---|---|
+| `0x04` | any | ACKs, then ignores it (the handler is a bare `rts`) |
+| `0x08` | 6 | ACKs only |
+| `0x0B` | 3 | ACKs only |
+| `0x0C` | 8 | key bitmap → UI task (`fp_rx_keys_0C`) |
+| `0x0D` | 6 | rotary → UI task |
+| `0x0F` | 2 | ACK, then starts the init sequence below |
+| `0x10` | 3 | ACKs and logs it |
+| `0x11` | 3 | ACKs only |
+| `0x12` | any | ACKs only |
+| `0x18` | 3 | NAK of the head unit's last frame → retransmit |
+
+**Head unit → panel — established.** The validator rejects these as panel
+addresses, which makes them the head unit's command set:
+`00 01 02 03 06 07 09 0A 0E`.
+
+| ADDR | frame | sent when |
+|---|---|---|
+| `0x00` | `00 03 2E 31` | resync, after 3 timeouts |
+| `0x01` | `01 06 00 28 08 03 3A` | builder exists, **no caller found** |
+| `0x02` | `02 0C 40 1D 4B 42 40 00 40 01 FF 05 7D` | init step 0 |
+| `0x03` | `03 0F 3C 0A 02 0A 04 0A 04 0A 04 0A 04 0A 0A A6` | init step 1 |
+| `0x0A` | `0A 07 00 FF 1C FF 1C 47` | init step 2 |
+| `0x09` | `09 06 00 00 0F 06 24` | init step 3 |
+| `0x06` | `06 0E 00 00 00 00 30 70 00 00 00 00 00 00 B4` | init step 4; afterwards the dimmer (§5.2.1) |
+| `0x07` | `07 06 o0 o1 o2 o3 CK` | lamps, §5.6 |
+| `0x0E` | — | accepted as a command address, **nothing in this OSM builds it** |
+
+**Init sequence — established.** `fpdrv_init_step` (0x805567DE) is a switch on
+a step counter. Each `0x15` from the panel advances it:
+
+```
+panel  0F 02 11                      boot announcement
+HU     15                            ACK
+HU     02 0C …  7D    panel 15
+HU     03 0F …  A6    panel 15
+HU     0A 07 …  47    panel 15
+HU     09 06 …  24    panel 15
+HU     06 0E …  B4    panel 15       init done
+```
+
+What the payloads of `0x02`, `0x03`, `0x09` and `0x0A` configure is not known.
+**Inference:** `0x03` (`3C 0A 02 0A 04 0A …`) looks like timing parameters,
+perhaps key repeat or debounce.
+
+### 5.6 Softkey indicator lamps — `ADDR 0x07`
+
+**Frame — established.** `fp_send_lamp_frame` (0x80603056) takes a 32-bit
+lamp word and splits it by bit parity:
+
+```
+07 06  o0 o1  o2 o3  CK
+
+o2:o3 (u16 BE) bit k = lamp word bit 2k      (the even bits)
+o0:o1 (u16 BE) bit k = lamp word bit 2k+1    (the odd bits)
+CK = (sum of the 6 preceding bytes) & 0xFF
+```
+
+It goes through the same TX pool and mailbox 0x14 as the dimmer frame.
+
+**Lamp word — established.** `lamp_update` (0x8059A840) sets even bits only,
+so in this firmware **`o0` and `o1` are always zero**:
+
+| lamp word bit | `o2`/`o3` bit | on when |
+|---|---|---|
+| 0, 2 | `o3` `0x01`, `0x02` | the CD-mechanism state (`FUN_80602e2c`, next to the `CDS_Eject` code) is not 2 |
+| **4** | **`o3` `0x04`** | **softkey mask bit 0**, and the power state is 3 |
+| **6** | **`o3` `0x08`** | **softkey mask bit 1**, and the power state is 3 |
+| **8** | **`o3` `0x10`** | **softkey mask bit 2**, and the power state is 3 |
+| **10** | **`o3` `0x20`** | **softkey mask bit 3**, and the power state is 3 |
+| 12, 14 | `o3` `0x40`, `0x80` | byte 0 of the dimmer state (the struct `0x635` fills) is 1 |
+| 16 | `o2` `0x01` | same as above |
+
+If `lamp_power_ok` fails (the power manager is not in state 2 or 3, plus two
+other state checks), the frame is still sent, with every lamp off.
+
+**Where the mask comes from — established.** On every screen change, the
+transition handler (0x805B55B0) calls `screen_softkey_lamp(new_screen)`. That
+looks the screen up in a table at **0x8046B0C0**: 221 entries of
+`{u16 screen_id, u16 mask}`. If the mask differs from the last one and is not
+`0xF`, it is stored and the lamp frame is rebuilt.
+
+| mask | screens |
+|---|---|
+| `0` (all off) | 141 |
+| `0x1` | 2 (`0x04`, `0x24`) |
+| `0x2` | 26 (mostly `0xA5`–`0xB8`, `0xD3`–`0xD8`) |
+| `0x4` | 27 (`0x0E`–`0x23` and others) |
+| `0x8` | 22 |
+| `0xF` (leave unchanged) | 3 (`0x37`, `0x41`, `0x42`) |
+
+Screens `0x6D` and `0x6E` work it out at run time from a state byte:
+1 → `0x2`, 3 → `0x8`, 6 → `0x1`, anything else → `0`.
+
+**At most one bit is ever set.** That matches what the panel shows: entering a
+softkey's sub-screen lights that softkey's segment, and the main screens (mask 0)
+turn all four off. Which bit is which corner has **not** been established.
+The UI's key codes are known from a debug switch (0x805FAD78): `SKNW=5`,
+`SKNE=6`, `SKSW=7`, `SKSE=8`, `SETUP=0x0F`, `RETURN=0x10`, `ROT_L/R=0x11/0x12`.
+The table that turns the `0x0C` bitmap into those codes was not found in
+`OSM`. Two bench frames settle it (§6).
+
 ## 6. Where to go next
 
 Ghidra 12.1.4 is installed locally. It has the `SuperH4:BE:32:default` and
@@ -397,8 +534,11 @@ Ghidra 12.1.4 is installed locally. It has the `SuperH4:BE:32:default` and
 The Ghidra project is at `~/ghidra_projects/rnse` on the host (outside the
 repo; Ghidra refuses paths with a `.` element, which rules out the distrobox
 home). It holds V574 `OSM` imported as `SuperH4:BE` at 0x80400200, fully
-analysed, with the §5.2.1 functions named. Helper scripts are in `scripts/`:
-`Dump.java`, `DumpRange.java`, `Listing.java` and `Label.java`.
+analysed, with the §5.2.1, §5.5 and §5.6 functions named. Helper scripts are
+in `scripts/`: `Dump.java`, `DumpRange.java`, `DumpRangeCreate.java` (creates
+functions at every prologue first), `Listing.java`, `DisList.java` (forces
+disassembly, for switch cases that auto-analysis missed), `Callers.java`,
+`Label.java` and `LabelFp.java`.
 
 1. ~~Find where the SH modules load.~~ Done (§3.3).
 2. ~~Find the CAN handler behind the dimmer.~~ Done (§5.2.1): `0x635`, 3 bytes;
@@ -415,10 +555,18 @@ analysed, with the §5.2.1 functions named. Helper scripts are in `scripts/`:
 5. **Follow `CAN_Pass_mzas`** to find what the power manager wants from `mZAS`
    before it starts the application. That is the precondition for `CANBUS.md`
    T6.
-4. **Follow `CAN_Pass_mzas`** to find what the power manager wants from `mZAS`
-   before it starts the application. That is the precondition for `CANBUS.md`
-   T6.
-6. Load the `.MOT` image as `V850:LE:32` at base 0x3800. This matters less now,
+6. **Bench test: the panel link from §5.5–§5.6.** After `0F 02 11`, send `15`
+   and then the five init frames, waiting for a `15` after each. Then:
+   - `07 06 00 00 00 04 11` → lights the segment for softkey mask bit 0;
+   - `07 06 00 00 00 08 15`, `… 10 1D`, `… 20 2D` → bits 1, 2, 3;
+   - `07 06 00 00 00 00 0D` → all off.
+
+   Record which corner each one lights; that closes the mapping in §5.6. Also
+   worth trying: lamps 0/1/6/7/8 (`o3` `0x01`, `0x02`, `0x40`, `0x80`; `o2`
+   `0x01`), and an odd bit (`o1` `0x04`) to see whether the odd half does
+   anything, such as blinking. If `0x07` does nothing without the init frames,
+   that also says the init matters.
+7. Load the `.MOT` image as `V850:LE:32` at base 0x3800. This matters less now,
    but it would show what the V850 actually owns.
 
 Before relying on any of this for the bench unit, check which hardware version

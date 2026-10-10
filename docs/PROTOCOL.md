@@ -74,6 +74,23 @@ larger values disambiguate it.
 | `0x0F` | 2 | boot announcement, broadcast until `0x15` is sent | **established** |
 | `0x18` | 3 | status / response — 1 payload byte | inferred |
 
+**Firmware cross-check (`FIRMWARE.md` §5.5).** The head unit's receive code
+confirms all four rows and names more. Every address below comes from
+disassembly; none has been seen on the wire.
+
+| direction | ADDR | LEN | from firmware |
+|---|---|---|---|
+| panel → HU | `0x04` | any | accepted, ignored |
+| panel → HU | `0x08`, `0x0B`, `0x10`, `0x11`, `0x12` | 6, 3, 3, 3, any | accepted, ACKed, no action |
+| panel → HU | `0x18` | 3 | NAK of the head unit's last frame → retransmit |
+| HU → panel | `0x00` | 3 | `00 03 2E 31`, resync after 3 timeouts |
+| HU → panel | `0x01`, `0x02`, `0x03`, `0x09`, `0x0A` | 6, 12, 15, 6, 7 | config frames; `02`, `03`, `0A`, `09` are the init sequence |
+| HU → panel | `0x06` | 14 | dimmer / backlight PWM (`FIRMWARE.md` §5.2.1) |
+| HU → panel | `0x07` | 6 | **softkey indicator lamps** (`FIRMWARE.md` §5.6) |
+| HU → panel | `0x0E` | ? | reserved; nothing in the firmware builds it |
+| HU → panel | `0x15` | bare byte | **ACK** |
+| HU → panel | `0x16` | bare byte | **ACK, with the next frame following straight after** |
+
 ---
 
 ## 4. `ADDR 0x0C` — key state
@@ -206,6 +223,12 @@ it. During the fuzz sweep only 2–3 repeats appeared, consistent with this.
 This is the single most important open question. It is directly testable: send
 an ACK and see whether the repeat count drops below 4.
 
+**Firmware cross-check:** the head unit answers every valid panel frame with
+the bare byte **`0x15`** (`FIRMWARE.md` §5.5). It is the same byte that ends
+the boot announcement: that is the head unit ACKing `0F 02 11`. So the ACK to
+send after each `0x0C`/`0x0D` report is `0x15`. Whether the panel then stops
+repeating still needs a capture.
+
 ---
 
 ## 7. Reset line and the boot announcement
@@ -307,6 +330,14 @@ at ~53 ms while input is ignored:
 |---|---|---|---|
 | A (boot) | `0F 02 11` | 52.6 ms | `0x15` |
 | B | `18 03 80 9B` | 53.6 ms | **unknown** |
+
+**Firmware reading (`FIRMWARE.md` §5.5):** `0x16` means "ACK, and a frame
+follows". The head unit only sends it with a queued command right behind it.
+On its own, the panel waits for a frame that never comes. `18 03 80 9B` is
+byte-for-byte the head unit's own NAK for "no handler for this address", so
+the panel is most likely reporting the missing or unusable frame, and repeating
+because nobody ACKs it. This is an inference: the panel's own code has not been
+read.
 
 So state B is very likely **waiting for a reply of its own**. Finding it needs
 a two-stage probe: `0x16`, then a candidate sent after the 258 ms transition
@@ -475,12 +506,16 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
 
 1. ~~What ends the `0x0F` announce phase?~~ **SOLVED** — sending `0x15`, and
    `0x15` specifically: `0x14` is ignored, `0x16` leads elsewhere. See §7.
-2. Does an ACK stop the 4× key/rotary retry, and what is its format? Note this
-   is a *separate* question from the boot handshake, which needs no ack.
+2. Does an ACK stop the 4× key/rotary retry, and what is its format?
+   **Format answered by the firmware: the bare byte `0x15`, the same byte that
+   ACKs the boot announcement** (§6 cross-check). That it stops the retry
+   still needs a capture.
 3. ~~Why is reply latency 1.2 ms in one state and 258 ms in another?~~
    **RESOLVED** — 258 ms is the state-B transition delay, not a latency.
-4. **What reply resolves state B** (the `18 03 80 9B` broadcast)? Same shape of
-   problem as the boot handshake, and the same probe finds it.
+4. **What reply resolves state B** (the `18 03 80 9B` broadcast)? The
+   firmware says `0x16` means "ACK, a frame follows" (§7). So the likely
+   answer is to send a valid frame straight after `0x16`, or to ACK the
+   `0x18` with `0x15`.
 5. How large is the command space around `0x14`/`0x15`/`0x16`, and what do the
    other values do?
 6. Why does the panel answer only every 2nd–3rd byte regardless of byte gap?
@@ -488,8 +523,14 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
    mapped, see §4.
 8. ~~Which rotary channel is the volume knob vs the scroll wheel.~~ **SOLVED** —
    d0 = volume, d2 = scroll, bit 7 = 0 for CW. See §5.
-9. What is `0x22`, and does it have its own message type?
-10. What do status payloads `0x40` / `0x01` / `0x06` / `0x80` mean?
+9. What is `0x22`, and does it have its own message type? The head unit's
+   firmware does not know it: it would reject `0x22` as ≥ 0x13.
+10. What do status payloads `0x40` / `0x01` / `0x06` / `0x80` mean? On the
+    **head-unit side** they are bit flags: `0x01` checksum, `0x04` wrong
+    address, `0x40` wrong length, `0x80` no handler (`FIRMWARE.md` §5.5). If the
+    panel uses the same flags, the byte sweep mostly got "wrong length", which
+    is what a lone byte would cause. `0x06` would be `0x04 | 0x02`, and `0x02`
+    is unknown.
 11. ~~What drives the backlight?~~ **PARTLY SOLVED** — the 8-pin IC on
     connector pins 8/9, confirmed connected to backlight LEDs (§9). Still open:
     **what part is it** (marked `5W01` / `9.9`) and how is it commanded?
@@ -498,9 +539,9 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
 13. Are the unused key bits (P*.0 / P*.4, bytes 3–5) dead positions in a scan
     matrix, or keys this panel variant does not populate? (§4)
 14. **Nothing has ever been sent *to* the display.** Every message decoded so
-    far travels panel → head unit. No command that lights the screen, the
-    backlight, or an LED has been found, and the byte sweep in §8 never
-    produced visible output. This is the whole other half of the protocol.
+    far travels panel → head unit. **The firmware now supplies the other
+    half** (§3 cross-check): the init sequence, the dimmer (`0x06`) and the
+    softkey lamps (`0x07`). None of it has been tried on the panel yet.
 15. **What does PPG1 (connector pin 5) carry?** It is a hardware PWM output
     from the MB90561A and has never been captured. Put it on the logic analyzer
     and see whether it is idle, free-running, or modulated by anything.
