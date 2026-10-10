@@ -394,7 +394,7 @@ protocol), `TELCAN_TSK`, `[RVC] CAN` (OSM); `AMI_BAPERR_LOG` (BAP).
 ### 5.5 The panel link from the head unit's side
 
 Traced in Ghidra on V574 `OSM`, like §5.2.1. Names are the labels saved by
-`scripts/LabelFp.java`. **Everything in this section comes from disassembly.
+`ghidra/LabelFp.java`. **Everything in this section comes from disassembly.
 None of it has been sent to a panel yet.**
 
 **Link layer — established.** The FPDRV task near 0x80555000 owns the UART.
@@ -535,8 +535,9 @@ The Ghidra project is at `~/ghidra_projects/rnse` on the host (outside the
 repo; Ghidra refuses paths with a `.` element, which rules out the distrobox
 home). It holds V574 `OSM` imported as `SuperH4:BE` at 0x80400200, fully
 analysed, with the §5.2.1, §5.5 and §5.6 functions named. Helper scripts are
-in `scripts/`: `Dump.java`, `DumpRange.java`, `DumpRangeCreate.java` (creates
-functions at every prologue first), `Listing.java`, `DisList.java` (forces
+in this repo's `ghidra/` (pass it to Ghidra as `-scriptPath`): `Dump.java`,
+`DumpRange.java`, `DumpRangeCreate.java` (creates functions at every prologue
+first), `Listing.java`, `DisList.java` (forces
 disassembly, for switch cases that auto-analysis missed), `Callers.java`,
 `Label.java` and `LabelFp.java`.
 
