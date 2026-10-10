@@ -7,6 +7,11 @@ Companion to `PROTOCOL.md` (the panel serial link) and `BACKLIGHT.md` (the LED
 driver chain). Where those two describe measurements, **this file describes an
 experiment that has not been run yet.**
 
+**Status (2026-10-10). The unit has been revived and its application runs.
+T6 has been partly run on it (§3, §4.2): `0x635` byte 0 sets the display
+backlight; byte 1 lit no button LEDs.** The paragraph below is the status as of
+T4, on the bricked unit.
+
 **Status. T4 has been run; the experiment in §6 has not.** What *is* measured:
 the connector legend in §2, read off the unit's own case; the physical layer and
 bitrate in §2.2 (2026-09-25); the unit's network-management traffic and its
@@ -279,9 +284,28 @@ its own and is unaffected by lock state — but it does mean the negative is not
 clean, and the CAN-origin claim rests more on the elimination than on this
 observation. **T3b resolves it for the cost of typing four digits.**
 
-### `0x635` — the illumination message — **confirmed in firmware, untested on hardware**
+### `0x635` — the illumination message — **byte 0 established on hardware; byte 1 has no visible effect**
 
 The single most useful identifier for this project.
+
+**Update (2026-10-10), on the revived unit at the PIN screen, NM ring and
+`0x271` up (§4.2):**
+
+- **Byte 0 sets the display backlight — established.** The screen brightness
+  followed the values sent with `can_backlight.py`, and changed again during the
+  sweep below. This is the first hardware confirmation of the firmware trace,
+  and it shows the bench unit handles `0x635` the way V574 code does.
+- **Byte 2 does nothing visible**, as expected: the firmware never reads it.
+- **Byte 1 lit no button LEDs.** Sweep `captures/revived-0x635-sweep.log`:
+  `40 00 00` for 10 s, then byte 1 `00 → 20 → 40 → 64` at 2 s each, then
+  byte 0 `10 → 64` as a control. The display changed brightness; the button
+  backlight stayed dark throughout. Two panels were tried. The unit's CAN output
+  did not change at any step.
+
+So the open part is the panel side: whether the `06 0E …` frame reaches the
+panel with C/C' tracking byte 1, and whether the panel lights its LEDs from it.
+The next step is the Arduino and the panel alone, sending `ADDR 0x06` directly
+(`FIRMWARE.md` §5.2.1, `arduino/listener`).
 
 **Update (2026-10-08):** traced in the V574 firmware (`FIRMWARE.md` §5.2.1).
 The unit registers `0x635` with a length of 3. Byte 0 is the display level
@@ -369,7 +393,7 @@ vocabulary with it.
 ### 4.1 The unit's own traffic: network management — **established** (2026-09-25)
 
 **The unit on the bench is the bricked one, and it is boot-looping.** Everything
-below was measured on it.
+below was measured on it. The revived unit behaves differently; see §4.2.
 
 **The boot loop is 45.9 s, and NM restarts with it — established.** Guided
 session `captures/session-20260925-175559.log`: the unit's NM restart sequence
@@ -447,6 +471,54 @@ Tools:
   and logs every frame plus the operator's answers to `captures/`.
 - `uv run src/rnse/can_backlight.py`: interactive console (`nm on`, `ign on`,
   `on` / `off` / `level`, `status`).
+
+### 4.2 The revived unit — **established** (2026-10-10)
+
+The same unit, revived and booting to the PIN entry screen. Panel attached,
+unit locked. All captures in `captures/revived-*.log`.
+
+**Alone, it goes quiet.** With no other node on the bus, it sends nothing.
+Unlike the bricked unit, it does not sit in limp-home sending `0x436` every
+500 ms.
+
+**It flags that it is ready to sleep.** Its alive frame is now
+`16 02 80 00 00 00`. Byte 2 is `80`, not `C0 04` as before; meaning unknown.
+With a peer ringing it, it rings `00 01` for about 3 s, then `00 11`: the ring
+opcode with bit `0x10` set. That is the OSEK NM sleep-indication flag, "I am
+ready to sleep". **The opcode is the low nibble of byte 1; the high nibble
+carries flags.**
+
+A peer that only recognised an exact `01` stopped passing the ring back once the
+flag appeared. The unit then timed out and restarted its NM every ~190 ms
+(`captures/revived-nm-sleepind-loop-30s.log`). With the flags masked off, and
+the ring passed back without a sleep flag of our own, the ring held: 300 rings
+in 30 s and 600 in 60 s, with no restarts (`captures/revived-ring-ign-30s.log`).
+`can_backlight.py` now does this.
+
+**Application traffic — established.** With the ring and `0x271` up, the unit
+sends four identifiers that the bricked unit never did:
+
+| ID | period | payload seen | reading |
+|---|---|---|---|
+| `0x363` | 800 ms | `48 05 01 72 74 00 00 00`; later all `20` | driver-display text, with `0x365` (inferred) |
+| `0x365` | 800 ms | `1C 1C 1C 46 4D 1C 1C 1C` (`"FM"`); later all `20` | **text for the driver information display**: source or station (operator's reading) |
+| `0x604` | 1000 ms | `80 00 00 00 00 00 00 00` | unknown |
+| `0x661` | 1000 ms | `8A 01 12 A0 00 00 00 00` | third-party: "RNS-E TV mode status" (§4) |
+
+The payloads stayed the same within each run. `0x363`/`0x365` went to spaces in
+the last session (`captures/revived-0x635-sweep.log`).
+
+**Front-panel keys are not on CAN.** Over 60 s of pressing panel buttons and
+turning both knobs (`captures/revived-buttons-60s.log`), nothing new appeared:
+no `0x461`, and no change in any payload.
+
+**The scroll wheel's rotation is ignored — a fault of this unit.** At the PIN
+screen, pushing the scroll wheel confirms a digit and the volume push turns the
+screen off and on. Turning the wheel does not change the digit. This happened
+before the brick as well, and still happens with a second panel and a second
+wheel. The original wheel mapped correctly under `map_buttons.py`
+(`PROTOCOL.md` §5), so the panel sends its rotation. The head unit takes the
+`0x0C` key frames but not the `0x0D` rotary ones. Not pursued.
 
 ---
 
@@ -722,12 +794,13 @@ Reordered after the bench observations in §3 and §5. Updated after T4
 2. **Is that negative about CAN, or about the lock state?** The unit was at a
    PIN prompt. A locked unit withholding illumination looks identical from
    outside. (§3, T3b)
-3. **Does the bricked unit still do any of this?** Every behaviour in §5 was
-   recorded before the failed update. The go/no-go has not been run. (T2)
+3. ~~**Does the bricked unit still do any of this?**~~ **ANSWERED** — the unit
+   was revived (2026-10-10). It powers up, reaches the PIN screen and runs its
+   application (§4.2). The 30-minute shutdown has not been re-timed.
 4. ~~Does the NM ring form?~~ **ANSWERED — yes** (§4.1), with node `0x00` and
-   `02` = alive, `01` = ring. **Still open: does the unit act on `0x635` once
-   it has?** On the bricked, boot-looping unit it sends no application traffic
-   at all with the ring up, so this needs a unit whose application boots.
+   `02` = alive, `01` = ring. ~~Does the unit act on `0x635` once it has?~~
+   **ANSWERED — yes**, for byte 0 (§3). The revived unit also sets the
+   sleep-indication flag `0x10` in its ring (§4.2).
 5. **Is the 30-minute shutdown CAN-gated, NM-gated, or a plain idle timer?** Not
    yet distinguishable: CAN has never been kept alive for 30 minutes on this
    bench. (§5, T5)
@@ -745,13 +818,19 @@ Reordered after the bench observations in §3 and §5. Updated after T4
     yes**, about 0.3 s after power is applied, with no button press (§4.1). On
     the bricked unit, at least.
 11. Is `0x635` the correct identifier for this unit's illumination, and is byte 1
-   really the button backlight? (T6)
+   really the button backlight? **Partly answered:** yes for the display
+   (byte 0). Byte 1 lit no button LEDs on two panels (§3). Next: drive `ADDR
+   0x06` at the panel from the Arduino, with no head unit.
 12. Is the value range `0x00..0x64`, or does `0xFF` mean something? (T6)
 13. Is the backlight command graded or binary? (T6, T8)
 14. What does the head unit say to the panel during boot, and does it
     acknowledge key and rotary messages? (T3)
 15. Is `0x461` — "RNS-E button controls" on the vehicle bus — related in any way
-    to the `0x0C` key bitmap on the panel link, or merely adjacent?
+    to the `0x0C` key bitmap on the panel link, or merely adjacent? **Partly
+    answered:** the unit sends nothing on CAN when panel keys are pressed
+    (§4.2), so if `0x461` exists it is probably input to the unit, not output.
+16. What do `0x363`, `0x604` and `0x661` carry, and what does `0x365` say once
+    something is playing? (§4.2) Needs an unlocked unit.
 
 ---
 

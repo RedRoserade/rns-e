@@ -67,6 +67,8 @@ NM_BASE = 0x420
 HEAD_UNIT_NM_ID = 0x436
 HEAD_UNIT_NODE = HEAD_UNIT_NM_ID - NM_BASE
 NM_RING, NM_ALIVE, NM_LIMP = 0x01, 0x02, 0x04
+NM_OP_MASK = 0x0F           # high nibble carries flags, not the opcode
+NM_SLEEP_IND = 0x10         # seen on the healthy unit's ring after ~3 s: `00 11`
 NM_TTYP = 0.050             # delay before passing the ring back (unit's own ring period is 100 ms)
 NM_RING_LOST = 0.500        # no ring for this long: announce again
 NM_OPCODES = {
@@ -109,7 +111,9 @@ def invalid_note(payload):
 def describe_nm(data):
     if len(data) < 2:
         return ""
-    op = NM_OPCODES.get(data[1], f"op 0x{data[1]:02X}")
+    op = NM_OPCODES.get(data[1] & NM_OP_MASK, f"op 0x{data[1]:02X}")
+    if data[1] & NM_SLEEP_IND:
+        op += " +sleep-ind"
     return f"NM → node 0x{data[0]:02X}, {op}"
 
 
@@ -202,7 +206,7 @@ class NmPeer(can.Listener):
         if msg.arbitration_id != HEAD_UNIT_NM_ID or len(msg.data) < 2 \
                 or not msg.is_rx:
             return
-        successor, op = msg.data[0], msg.data[1]
+        successor, op = msg.data[0], msg.data[1] & NM_OP_MASK
         with self.lock:
             self.unit_state = op
             self.seen[(successor, op)] = self.seen.get((successor, op), 0) + 1
