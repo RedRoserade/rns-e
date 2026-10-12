@@ -1,84 +1,54 @@
 # Next steps
 
-Where the bench work stopped on 2026-10-10, and what to do next. Findings are
+Where the bench work stopped on 2026-10-12, and what to do next. Findings are
 in the docs; this file is the to-do list. Delete items as they are done.
 
 ## Where things stand
 
-- **Head unit (CAN):** revived, boots to the PIN screen. `0x635` byte 0 sets
-  the display backlight; byte 1 lit no button LEDs on two panels. The NM ring
-  holds with `can_backlight.py` (`CANBUS.md` §3, §4.2).
-- **Panel link (Arduino, no head unit):** the panel accepts `0x15` as the ACK,
-  which stops its 4× retry, and ACKs all five head-unit init frames
-  (`PROTOCOL.md` §6, §7), every one on the first try with
-  `arduino/listener`. `0x16` + frame puts it in state B instead.
-- **Not yet tried:** anything with the LED rail fed. Every backlight test so
-  far ran with pin 9 unpowered, so "no LEDs" has meant nothing.
+- **The panel can be driven without a head unit.** Input (keys, both
+  rotaries), the link layer and the init sequence (`PROTOCOL.md` §4–§7), and
+  now the lighting (§8): lamp frame `0x07` switches the button backlight
+  (`0x40`), the four corner indicators and the daughter board; dimmer frame
+  `0x06` sets brightness (C backlight, B corners). `arduino/listener` does all
+  of it; LED rail on pin 9 from a PP3.
+- **Head unit / CAN: parked.** Not needed to drive the panel. CAN (`0x635`
+  dimming, ignition, etc.) will be handled in software by the UI later
+  (`ui-prototype/`). `CANBUS.md` and `FIRMWARE.md` §5.3, §5.7 stay as
+  reference.
 
-## 1. Feed the LED rail and test the backlight — the main task
+## 1. Flash and check the refined listener
 
-Wiring: https://claude.ai/artifact/FvscwtBstZmHNBJuvVsW1E
-(PP3 + → panel pin 9, PP3 − → panel pin 2. **Never 9 V on pin 1.**)
+The lighting commands changed (2026-10-12). Not yet run on the panel.
 
-Before:
+- [ ] Flash `arduino/listener`. After `r`, expect `# init done`, then a
+      dimmer frame and `lamps on=0x40` — backlight on at full by default.
+- [ ] `b` toggles the backlight; `+`/`-` step brightness (B and C together,
+      doubling/halving the on-time, 9 = full, 0 = off).
+- [ ] `L 44` = backlight + NE; `L 44 4` = the same with NE flashing; `L 0`
+      everything off.
+- [ ] `s` shows the lamp masks and dimmer values.
 
-- [ ] PulseView: check the channel names (D0 = Arduino TX "Fuzzer",
-      D1 = panel TX "Board", D3 = Reset). They have flipped before.
-      Sample at 1 MHz. Optionally D4 on pin 5 (PPG1, never captured).
-- [ ] Multimeter ready on pin 9 and pin 8.
+## 2. Loose ends on the panel (none block the UI)
 
-Sequence:
+- [ ] Is B (corners) as steep at the bottom as C? `D 0 0x900 0`, `D 0 0x980 0`.
+- [ ] What channel A drives, if anything — e.g. the daughter board's
+      brightness: `L 1`, then `D 0 0 0` vs `D 0x158E 0 0`.
+- [ ] Does lighting work with init **off** (`i`, `r`, then `l`)? If yes, the
+      UI can skip the init frames.
+- [ ] How long a PP3 lasts with everything lit; pick a proper 9 V supply for
+      the build.
 
-1. [ ] USB in, `r`, wait for `# init done`. Battery still off.
-2. [ ] Connect the battery. Pin 8 should read ≈ 4.5 V (rail ÷ 2). Note
-       whether any LED lights **before** sending anything: the last init frame
-       is already a dimmer frame (`06 0E 00 00 00 00 30 70 …`, C = full
-       period, A = B = 0).
-3. [ ] `b` — sends the dimmer frame at half of each period. Note the LEDs.
-4. [ ] One channel at a time, with `D A B C` (periods: A `0x158E`,
-       B `0x09B0`, C `0x3070`):
-       - `D 0 0 0`
-       - `D 0x158E 0 0`, then `D 0 0x9B0 0`, then `D 0 0 0x3070`
-       - for whichever channel lights: half, quarter, zero — is it graded?
-5. [ ] `+` / `-` to step all three by a tenth of their period.
-6. [ ] Measure pin 9 under load, and how long the PP3 holds up.
-7. [ ] Repeat a lit setting with init **off** (`i`, `r`, then `D …`). Does the
-       dimmer frame still work without the init sequence?
+## 3. Hook the panel up to the UI
 
-Record for each step: the frame sent, the panel's reply (ACK / NAK / none),
-which LEDs changed. The question being answered: which of A, B, C drives the
-button backlight (`FIRMWARE.md` §5.2.1 says C comes from `0x635` byte 1), and
-whether it is graded or on/off.
-
-If nothing lights at all: probe TR5015's base during a `D` sweep
-(`BACKLIGHT.md` §8, `CANBUS.md` T8). A level that follows the sweep means the
-frame works and the problem is downstream.
-
-## 2. Softkey lamps (`ADDR 0x07`)
-
-The listener cannot send this frame yet. Add a raw-frame command (e.g.
-`F 07 06 00 00 00 04`, with the checksum computed) and run the list in
-`FIRMWARE.md` §6 item 6:
-
-- [ ] `o3` = `04`, `08`, `10`, `20` one at a time: which corner lights?
-- [ ] `o3` = `00`: all off.
-- [ ] The other bits (`o3` `01`, `02`, `40`, `80`; `o2` `01`) and one odd bit
-      (`o1` `04`).
-
-## 3. Back to the head unit
-
-Once the panel side is understood:
-
-- [ ] Head unit + panel + analyser on the panel link. Sweep `0x635` byte 1
-      with `can_backlight.py` and look for `06 0E …` frames. Do C and C' follow
-      byte 1? (`CANBUS.md` §3)
-- [ ] Capture the real head unit's boot on the panel link, and compare its
-      init and ACK timing with what the listener does.
+- [ ] `ui-prototype/PLAN.md`: the serial panel source — parse `MSG 0C …` /
+      `MSG 0D …` lines into `PanelEvent`s, send `L`/`D`/`+`/`-` for the
+      lighting. Keep the lamp state on the UI side and always send the whole
+      mask: a corner sent without `0x40` turns the backlight off.
 
 ## Optional
 
 - [ ] State B: try ACKing `18 03 80 9B` with `0x15`, and a frame sent after
-      the 258 ms transition (`PROTOCOL.md` §11 q4).
+      the 258 ms transition (`PROTOCOL.md` §12 q4).
 
 ## Housekeeping
 

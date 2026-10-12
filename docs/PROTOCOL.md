@@ -8,8 +8,10 @@ Status: transport, frame format, the boot handshake, and the full input map
 (18 buttons + 2 rotaries) are **established**. Since 2026-10-10 so is the
 link layer from the head unit's side: the panel accepts the `0x15` ACK, which
 stops its retries (§6), and ACKs all five init frames from the head unit's
-firmware (§7). What the panel *does* with the dimmer (`0x06`) and lamp
-(`0x07`) frames is not yet known. Each claim below is marked with its
+firmware (§7). Since 2026-10-12 the **lighting is established** too: the lamp
+frame `0x07` switches the button backlight and every indicator, and the dimmer
+frame `0x06` sets their brightness (§8). Together that is everything needed to
+drive the panel without a head unit. Each claim below is marked with its
 confidence.
 
 ---
@@ -90,8 +92,8 @@ the rest have not been sent.
 | panel → HU | `0x18` | 3 | NAK of the head unit's last frame → retransmit |
 | HU → panel | `0x00` | 3 | `00 03 2E 31`, resync after 3 timeouts |
 | HU → panel | `0x01`, `0x02`, `0x03`, `0x09`, `0x0A` | 6, 12, 15, 6, 7 | config frames; `02`, `03`, `0A`, `09` are the init sequence |
-| HU → panel | `0x06` | 14 | dimmer / backlight PWM (`FIRMWARE.md` §5.2.1) |
-| HU → panel | `0x07` | 6 | **softkey indicator lamps** (`FIRMWARE.md` §5.6) |
+| HU → panel | `0x06` | 14 | **dimmer**: brightness of the lamps (§8, `FIRMWARE.md` §5.2.1) |
+| HU → panel | `0x07` | 6 | **lamps**: button backlight and indicators on/off/flash (§8, `FIRMWARE.md` §5.6) |
 | HU → panel | `0x0E` | ? | reserved; nothing in the firmware builds it |
 | HU → panel | `0x15` | bare byte | **ACK** |
 | HU → panel | `0x16` | bare byte | **ACK, with the next frame following straight after** |
@@ -161,7 +163,7 @@ is probably shared across RNS-E variants with more keys.
 
 **The volume knob's push (power/mute) is not in the map, and never will be.**
 It is not wired to the microcontroller at all — it shunts connector pin 7 to
-ground and the head unit senses it directly (§9). Pressing it produces no
+ground and the head unit senses it directly (§10). Pressing it produces no
 serial traffic. So the spare bits above are not hiding it.
 
 ---
@@ -307,7 +309,7 @@ Properties of the handshake:
 - **A single bare byte is sufficient.** No `[ADDR][LEN][CKSUM]` framing needed.
 - **The panel does not reply to it.** No `18 03 xx`, nothing — it is accepted
   silently and the panel simply goes quiet. This fits the ACK/NAK reading in
-  §8: `18 03 xx` is only emitted for bytes the panel does *not* accept.
+  §9: `18 03 xx` is only emitted for bytes the panel does *not* accept.
 - Afterwards the panel is fully silent until a key or rotary changes; gaps of
   3.1 s with nothing on the wire were observed.
 
@@ -401,8 +403,9 @@ panel answered every one with `0x15` within ~1 ms of its last byte
 A 20 ms pause between the `0x15` and the first frame was used; whether it is
 needed is untested. Afterwards keys and rotaries reported normally, once each.
 These are the **first head-unit → panel frames confirmed on the wire.** What
-they configure is still unknown; nothing visible changed, but the LED rail was
-not fed.
+`02`, `03`, `0A` and `09` configure is still unknown. The last one is a dimmer
+frame that leaves everything dark (B = B' = 0, C at full off-time; §8), so
+nothing lights until a real dimmer frame and a lamp frame follow.
 
 (In that capture, the listener retransmitted frames 2–5 once each although the
 panel had ACKed them. That was the Arduino misreading the ACK while its USB
@@ -412,7 +415,103 @@ every frame is ACKed on the first try and the whole init takes 120 ms, from
 
 ---
 
-## 8. Response to arbitrary received bytes (INFERRED)
+## 8. Lighting — `0x07` lamps and `0x06` dimmer — **established** (2026-10-12)
+
+Every LED on the panel is fed from **connector pin 9** (+9 V; a PP3 works on
+the bench). Nothing lights without it, whatever is sent. Two head-unit frames
+control them: `0x07` decides **which** lamps are on, `0x06` decides **how
+bright**. A lamp needs both: an ON bit, and a non-zero on-time on its dimmer
+channel. Both frames are ACKed with `0x15` like any other. Mapped with
+`arduino/listener`; the frame layouts come from the head unit's firmware
+(`FIRMWARE.md` §5.2.1, §5.6).
+
+### `ADDR 0x07` — lamps
+
+```
+07 06  F1 F0  N1 N0  CK
+
+N1:N0  ON mask,    u16 big-endian
+F1:F0  FLASH mask, u16 big-endian, same bit layout
+```
+
+| bit | lamp | dimmer channel |
+|---|---|---|
+| `0x0001` | SD card + eject daughter board | — |
+| `0x0002` | eject button | — |
+| `0x0004` | NE softkey indicator | B |
+| `0x0008` | NW softkey indicator | B |
+| `0x0010` | SE softkey indicator | B |
+| `0x0020` | SW softkey indicator | B |
+| **`0x0040`** | **main button backlight** | **C** |
+| `0x0080`–`0x8000` | nothing visible | — |
+
+- **The frame is the whole lamp state, and the backlight is one of its bits.**
+  Each frame replaces the last. Sending a corner on its own (`… 00 04`) turns
+  the backlight **off**; to light a corner and keep the backlight, send both
+  bits (`… 00 44`). Whoever drives the panel has to keep the lamp state and
+  OR the bits together.
+- Any combination works (`N0` = `0x3C` lights all four corners). The head unit
+  only ever sets one corner at a time; the panel does not care.
+- A FLASH bit makes its lamp flash. Each lamp is a pair of bits in the head
+  unit's 32-bit lamp word (2k = on, 2k+1 = flash), split by parity into the two
+  masks. The head unit never sets a flash bit.
+
+| frame | lights |
+|---|---|
+| `07 06 00 00 00 40 4D` | backlight only |
+| `07 06 00 00 00 44 51` | backlight + NE |
+| `07 06 00 00 00 04 11` | NE only — backlight **off** |
+| `07 06 00 00 00 00 0D` | everything off |
+
+### `ADDR 0x06` — dimmer
+
+```
+06 0E  A  B'  C  A'  B  C'  CK      each u16 big-endian
+
+A' = 0x158E − A     B' = 0x09B0 − B     C' = 0x3070 − C
+```
+
+Three PWM channels, each value sent with its complement against the
+channel's period. **B and C are off-times**: the brightness follows B' and C'.
+0 is full, the period is off.
+
+| channel | period | drives |
+|---|---|---|
+| A | `0x158E` | nothing visible |
+| B | `0x09B0` | the four softkey indicators |
+| C | `0x3070` | the main button backlight |
+
+Full brightness, A = B = C = 0: `06 0E 00 00 09 B0 00 00 15 8E 00 00 30 70 10`.
+
+Graded, not on/off. Backlight sweep (lamp `0x0040`, A = B = 0):
+
+| C | on-time C' | duty | backlight |
+|---|---|---|---|
+| `0` | `0x3070` | 100 % | brightest |
+| `0x800`, `0x1838` | | 83 %, 50 % | no visible difference from full |
+| `0x2800` | `0x870` | 17 % | visibly dimmer |
+| `0x2EFF` | `0x171` | 3.0 % | dimmest visible, dim room |
+| `≥ 0x3000` | `≤ 0x70` | < 1 % | off |
+
+The eye is roughly logarithmic, so the visible range is the bottom few percent;
+step brightness by doubling and halving the on-time, not linearly. The corner
+indicators: B = 0 is brighter than half, B = `0x9B0` is off; not swept further.
+
+On a head unit, B follows `0x635` byte 0 (display brightness) and C follows
+byte 1 (KL58s, the instrument-lighting dimmer), and the backlight bit is set
+when the dimmer state says the lights are on (`FIRMWARE.md` §5.2.1, §5.6). The
+init sequence's dimmer frame (§7) has B = B' = 0 and C at full, so after boot
+the panel is dark until both frames are sent.
+
+### Not yet known
+
+- What channel A drives, if anything.
+- Whether `0x0001` / `0x0002` have a dimmer channel (A is the candidate).
+- Whether the corner channel B shows the same steep bottom end as C.
+
+---
+
+## 9. Response to arbitrary received bytes (INFERRED)
 
 Sweeping all 256 byte values at the panel produced replies on `ADDR 0x18`:
 
@@ -454,7 +553,7 @@ weakens the "ACK timeout then re-arm" theory in §6.
 
 ---
 
-## 9. Connector and hardware
+## 10. Connector and hardware
 
 The panel connects through a **Molex PicoBlade, 1.25 mm pitch, 9 pins**.
 
@@ -472,8 +571,8 @@ radio and running.
 | 5 | PPG1 output | +5.0 | purpose unknown |
 | 6 | reset | +5.0 | active low: panel runs HIGH, stops LOW |
 | 7 | power button | +5.0 | shunted to pin 2 by the button on the volume dial — see below |
-| 8 | to 8-pin IC pin 7 | +4.5 | unknown |
-| 9 | to 8-pin IC pin 8 | +8.0 | unknown |
+| 8 | rail monitor **out** | +4.5 | pin 9 ÷ 2, buffered by an op-amp, for the head unit to read (`BACKLIGHT.md` §7) |
+| 9 | LED rail **in** | +9.0 | feeds every LED on the panel (§8). **Never connect to pin 1** |
 
 Every signal pin idles at +5 V, which is consistent with all of them being
 pulled up on the head-unit side.
@@ -502,30 +601,18 @@ board does not come up cleanly. This is not a theoretical concern: it is what
 corrupted `dump-v2.sr` (see §7), where the panel apparently never booted at all
 and the resulting silence was misread as a protocol state.
 
-### The 8-pin IC drives the backlight — **partly established**
+### Pins 8 and 9 — the LED rail — **established**
 
-Pins 8 and 9 of the connector go to pins 7 and 8 of an 8-pin IC on the board.
-**At least some of the display's backlight LEDs are confirmed connected to it**,
-so it is a backlight driver of some kind.
+Pin 9 is the +9 V supply for every LED on the panel, switched on the panel
+side; pin 8 is that rail halved and buffered by a TA75W01FU dual op-amp, going
+back to the head unit. The op-amp is **not** in the switching path. The LEDs are
+switched by the MCU, commanded over the serial link (§8). Details in
+`BACKLIGHT.md`.
 
-Markings, which have not been matched to a part yet:
-
-| side | marking |
-|---|---|
-| top | `5W01` |
-| bottom | `9.9`, printed upside down relative to the top |
-
-The +8 V on pin 9 against +4.5 V on pin 8 fits a driver fed a boosted rail with
-a lower-voltage control or feedback input, but which pin is which has not been
-established.
-
-> **Correction.** This IC was previously recorded as "fed ~9 V". The measured
-> figure is **+8.0 V** on connector pin 9.
-
-Because the backlight is driven by dedicated hardware on its own connector
-pins, and not over the serial link, no amount of UART traffic will light the
-panel. That fully explains the absence of visible activity during every capture
-made so far.
+> **Correction.** Earlier revisions said this IC was a backlight driver and that
+> "no amount of UART traffic will light the panel". Both were wrong: the IC is
+> a rail monitor, and the lamp and dimmer frames light everything (§8). The
+> earlier "+8.0 V" reading was a rounded 9.0 V.
 
 ### PPG1
 
@@ -536,14 +623,14 @@ worth putting on the logic analyzer next time the panel is on the bench.
 
 ---
 
-## 10. Tooling
+## 11. Tooling
 
 | file | purpose |
 |---|---|
 | `src/rnse/rnse.py` | decode a sigrok `.sr` capture → frames, messages, key/rotary mapping. stdlib only |
 | `src/rnse/map_buttons.py` | guided button/rotary mapping over the listener's serial output; writes `keymap.json` + `keymap.md` |
 | `arduino/fuzzer/fuzzer.ino` | byte sweep with proper reset sequencing and a marker channel |
-| `arduino/listener/listener.ino` | boot the board, decode messages, stream to USB; optional head-unit link layer (init frames, `0x15` ACK, NAK, retransmit) and the `0x06` backlight frame |
+| `arduino/listener/listener.ino` | boot the board, decode messages, stream to USB; head-unit link layer (init frames, `0x15` ACK, NAK, retransmit); lighting control (`0x07` lamps, `0x06` dimmer, §8); raw frames |
 | `arduino/handshake/handshake.ino` | dumb two-stage probe: reset, wait, send `STEPS[]`, observe on the LA |
 | `docs/keymap.json` | the mapping in §4/§5, machine-readable |
 
@@ -552,7 +639,7 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
 
 ---
 
-## 11. Open questions
+## 12. Open questions
 
 1. ~~What ends the `0x0F` announce phase?~~ **SOLVED** — sending `0x15`, and
    `0x15` specifically: `0x14` is ignored, `0x16` leads elsewhere. See §7.
@@ -580,19 +667,18 @@ Logic analyzer channel convention: `D0=Fuzzer`, `D1=Board`, `D2=Marker`,
     panel uses the same flags, the byte sweep mostly got "wrong length", which
     is what a lone byte would cause. `0x06` would be `0x04 | 0x02`, and `0x02`
     is unknown.
-11. ~~What drives the backlight?~~ **PARTLY SOLVED** — the 8-pin IC on
-    connector pins 8/9, confirmed connected to backlight LEDs (§9). Still open:
-    **what part is it** (marked `5W01` / `9.9`) and how is it commanded?
+11. ~~What drives the backlight?~~ **SOLVED** — the lamp frame `0x07` bit
+    `0x0040` switches it, dimmer channel C sets its brightness, and connector
+    pin 9 feeds it (§8). The 8-pin IC is a TA75W01FU op-amp, a rail monitor
+    (§10, `BACKLIGHT.md`).
 12. ~~Where does the volume-knob push (power/mute) go?~~ **SOLVED** — nowhere
-    near the MCU: it shunts connector pin 7 to ground (§9).
+    near the MCU: it shunts connector pin 7 to ground (§10).
 13. Are the unused key bits (P*.0 / P*.4, bytes 3–5) dead positions in a scan
     matrix, or keys this panel variant does not populate? (§4)
-14. **Nothing has ever been sent *to* the display.** Every message decoded so
-    far travels panel → head unit. **The firmware now supplies the other
-    half** (§3 cross-check): the init sequence, the dimmer (`0x06`) and the
-    softkey lamps (`0x07`). **The init sequence is accepted** (§7). What the
-    dimmer and lamp frames do, with the LED rail fed, is next
-    (`NEXT.md`).
+14. ~~What can be sent *to* the panel?~~ **SOLVED** for what matters: the
+    init sequence (§7), the lamps (`0x07`) and the dimmer (`0x06`) (§8). What
+    init frames `02`, `03`, `0A` and `09` configure, and what `0x01` and `0x0E`
+    do, is still unknown.
 15. **What does PPG1 (connector pin 5) carry?** It is a hardware PWM output
     from the MB90561A and has never been captured. Put it on the logic analyzer
     and see whether it is idle, free-running, or modulated by anything.

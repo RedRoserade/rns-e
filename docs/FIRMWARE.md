@@ -8,14 +8,17 @@ Companion to `PROTOCOL.md` (the panel serial link), `BACKLIGHT.md` (the LED
 driver chain) and `CANBUS.md` (driving the head unit over CAN).
 
 **Status. The layout, the module header, the checksum and the load addresses
-are established (§3.3). Three code paths have been traced by disassembly:
+are established (§3.3). Four code paths have been traced by disassembly:
 CAN `0x635` → KL58s check → the front-panel frame `ADDR 0x06` (§5.2.1); the
-panel link's ACK/NAK, init sequence and full address set (§5.5); and the
-softkey indicator lamps, screen → `ADDR 0x07` (§5.6).** Everything
+panel link's ACK/NAK, init sequence and full address set (§5.5); the
+softkey indicator lamps, screen → `ADDR 0x07` (§5.6); and the front-panel
+rotary gate behind the dead knob on the bench unit's SAFE/PIN screen, traced
+in V220 (§5.7).** Everything
 else comes from reading the files: headers, directory tables, checksums,
 `strings` and literal-pool pointers. Where a claim goes past what the bytes or
-the disassembly say, it is marked as an inference. Nothing here has been tested
-on hardware.
+the disassembly say, it is marked as an inference. The panel side of §5.2.1,
+§5.5 and §5.6 has since been confirmed on the bench (`PROTOCOL.md` §7, §8);
+the head-unit side has not been run.
 
 The firmware itself is not redistributed here.
 
@@ -345,10 +348,16 @@ to mailbox 0x14. `fp_set_dimmer` only sends when the values have changed
 9-pin link. Each value is sent alongside its complement against a fixed
 period (0x158E, 0x09B0, 0x3070), which looks like duty/period pairs for three
 of the MB90561A's PPG timers. That fits `BACKLIGHT.md`'s suspicion of the
-unused PPG channels. **`ADDR 0x06` has never been seen on the wire.** All
-captures so far were panel → head unit, and `PROTOCOL.md` §3 lists only 0x0C,
-0x0D, 0x0F and 0x18. This is the first head-unit → panel command identified,
-and it can be sent from the Arduino directly, without CAN.
+unused PPG channels.
+
+**Bench result (2026-10-12).** Sent from the Arduino, the frame works as traced,
+and the channels map to the panel as `PROTOCOL.md` §8 sets out: **B dims the
+four softkey indicators, C dims the button backlight, A has no visible
+effect.** B and C are off-times; the brightness follows B' and C'. So the
+softkey indicators follow `0x635` byte 0 (display) and the backlight follows
+byte 1 (KL58s). That the panel dims with B' and C' rather than B and C suggests
+`dim_curve_*` produces off-times — worth checking when the curves are
+evaluated (§6 item 4).
 
 ### 5.3 Power management and ignition
 
@@ -394,8 +403,9 @@ protocol), `TELCAN_TSK`, `[RVC] CAN` (OSM); `AMI_BAPERR_LOG` (BAP).
 ### 5.5 The panel link from the head unit's side
 
 Traced in Ghidra on V574 `OSM`, like §5.2.1. Names are the labels saved by
-`ghidra/LabelFp.java`. **Everything in this section comes from disassembly.
-None of it has been sent to a panel yet.**
+`ghidra/LabelFp.java`. **Everything in this section comes from disassembly.**
+The ACK, the init sequence and the `0x06`/`0x07` frames have since been
+confirmed against a panel (`PROTOCOL.md` §6–§8).
 
 **Link layer — established.** The FPDRV task near 0x80555000 owns the UART.
 
@@ -527,11 +537,129 @@ Screens `0x6D` and `0x6E` work it out at run time from a state byte:
 
 **At most one bit is ever set.** That matches what the panel shows: entering a
 softkey's sub-screen lights that softkey's segment, and the main screens (mask 0)
-turn all four off. Which bit is which corner has **not** been established.
+turn all four off.
+
+**Bench result (2026-10-12) — the whole frame is mapped.** Full tables in
+`PROTOCOL.md` §8; here is how they line up with the firmware:
+
+| lamp word bit | `o3`/`o2` | lights | firmware condition (above) |
+|---|---|---|---|
+| 0 | `o3` `0x01` | SD card + eject daughter board | CD mechanism state ≠ 2 — fits: the slot is on that board |
+| 2 | `o3` `0x02` | eject button | same |
+| 4 | `o3` `0x04` | **NE** | softkey mask bit 0 |
+| 6 | `o3` `0x08` | **NW** | softkey mask bit 1 |
+| 8 | `o3` `0x10` | **SE** | softkey mask bit 2 |
+| 10 | `o3` `0x20` | **SW** | softkey mask bit 3 |
+| 12 | `o3` `0x40` | **main button backlight** | dimmer state byte 0 = 1 — i.e. lights on |
+| 14, 16 | `o3` `0x80`, `o2` `0x01` | nothing visible | same |
+| odd bits | `o0`/`o1` | **flash** the lamp of the even bit below | never set by V574 |
+
+- The frame is the whole lamp state. Sending a corner without `0x40` turns the
+  backlight off; the head unit avoids that because `lamp_update` rebuilds the
+  whole word each time.
+- `o3` = `0x3C` lights all four corners, so the one-bit rule is the head
+  unit's, not the panel's.
+- The mask order NE, NW, SE, SW is **not** the key-code order below.
+- The lamps also need a non-zero on-time on their dimmer channel (§5.2.1): B for
+  the corners, C for the backlight. The init frame's dimmer leaves both at zero,
+  so nothing lights until a real dimmer frame follows.
+
 The UI's key codes are known from a debug switch (0x805FAD78): `SKNW=5`,
 `SKNE=6`, `SKSW=7`, `SKSE=8`, `SETUP=0x0F`, `RETURN=0x10`, `ROT_L/R=0x11/0x12`.
 The table that turns the `0x0C` bitmap into those codes was not found in
-`OSM`. Two bench frames settle it (§6).
+`OSM`; it is not needed, since the bench mapping above ties each mask bit to
+its corner.
+
+### 5.7 The dead rotary on the SAFE/PIN screen — traced in V220
+
+**This section is V220, not V574.** The bench unit (`8P0 035 192 H`) boots to
+the anti-theft SAFE code screen, where the code is entered by **turning** the
+knob to pick each digit and **pressing** to confirm. On this unit the press and
+every key work, but **neither knob does anything** — the digit never changes.
+The panel is fine: it emits the `ADDR 0x0D` rotary frames when turned
+(`PROTOCOL.md` §5), confirmed on the Arduino. So the turns are produced and
+reach the head unit; they are dropped somewhere inside it.
+
+To trace the head unit's own firmware, V220 `OSM` and V220 `APM` were extracted
+from `LOADING.KWI` (§3.1; the V220 `LDM` is byte-identical to
+`fw/0650_0220/LDM.BIN`, so the extraction is sound) and imported into the Ghidra
+project: `OSM_V220.bin` as `SuperH4:BE` at **`0x8000C100`** and `APM_V220.bin`
+at **`0x00280000`** (bases confirmed by the module header load word masked into
+P1/P0 and by the pointer-literal histogram). Addresses below are V220 virtual
+addresses; the functions are named by `ghidra/LabelV220.java`.
+
+**The SAFE screen does bind the rotary — established.** Its event loop
+`safe_screen_event_loop` (0x8013dc64) classifies each incoming event through
+`safe_event_classify` (0x8013ddc2), a `{event_code → case}` table at
+`0x80056b70` (terminated by `0xffff`). That table **contains `ROT_L` (0x11) and
+`ROT_R` (0x12) → case 2**, alongside the four softkeys (5–8 → case 1). So the
+screen is wired to consume the knob for digit selection, exactly as the UX
+requires. The failure is upstream delivery, not the screen. The SAFE code
+itself is verified by `thf_pin_verify` (0x801a37d8): the four entered digits are
+converted to ASCII, compared against the stored code, and on a mismatch
+`THF_FLASH.wrongpin_cnt` is bumped (confirm event id `0xa0`,
+`thf_confirm_handler` 0x80147762).
+
+**The gate — established.** The SAFE screen decodes each rotary event by calling
+`Swm_setget_rotary` (0x801a2a98) → `swm_setget_rotary_core` (0x801a2340). That
+function reads an SWM rotary-state struct (RAM `0x8c0eb9d8`) and a mode value,
+and decides whether to emit a `ROT_L`/`ROT_R` event:
+
+```
+sVar6 = hmi_interaction_mode()          ; 0x8013e896, returns 0..5
+if   sVar6 in {0,1,4}:  emit the turn   ; normal path
+elif state[0] == 0x1c:  digit-entry path
+elif state[0] == 0x10:  SILENTLY DROP   ; zero the event, issue nothing
+```
+
+The drop path writes zeros to the event struct and never calls the
+command-issue routine, so no event is delivered and nothing is logged. (The
+`SWM::Input information on ROT_VOL/ROT_JOYSTICK is annulled` strings exist in
+`OSM` but have **no code reference** in V220, so the suppression here is silent.)
+
+**`state[0]` is not the screen id.** `swm_setget_rotary_core` also calls
+`Adc_get_scrntype` (0x80153278), but that screen id goes into a local that feeds
+the event mapping (`FUN_801a263c`); it is a separate value from the `state[0]`
+the gate tests. There is **no per-screen rotary switch** — the gate is the
+interaction mode.
+
+**`hmi_interaction_mode` is a runtime decision — established.**
+`hmi_interaction_mode` (0x8013e896) returns a mode 0–5, first match wins:
+
+| condition | mode | rotary |
+|---|---|---|
+| `hmi_state[0x52] == 1` | 4 | **works** |
+| `hmi_major_state_q() == 2` | 5 | dropped |
+| `hmi_source_state_q() != 2` | 2 | dropped |
+| `hmi_state[0x0c] != 0` | 3 | dropped |
+| otherwise | 0 / 1 | **works** |
+
+`hmi_state` is a RAM struct at `0x8c0e1c14` (`hmi_state_ptr`, 0x8013de68);
+`hmi_major_state_q` (0x80191d0a) reads RAM flags `0x8c0eb365`/`0x8c0eb35c`;
+`hmi_source_state_q` (0x8018c710) reads a source/context struct. **Every input
+is live RAM.** So whether the knob works is a function of the subsystem state at
+that moment, **not** of the screen, and **not** of any byte in the firmware
+image. This is as far as static analysis reaches: which mode holds while SAFE is
+displayed is a runtime property.
+
+**Leading hypothesis (inference, untested).** Gate #3 drops the rotary whenever
+`hmi_source_state_q() != 2` — i.e. when the source/media subsystem is not in
+its running state. On a unit that only boots as far as the SAFE prompt and never
+starts the application (the `CAN_Pass_mzas`/`mZAS` precondition in §5.3 and
+`CANBUS.md` T6, and the stall noted in `NEXT.md`), that query plausibly never
+reaches `2`, forcing **mode 2** and killing the knob — while keys and the press,
+on a different path, keep working. If so the dead rotary is a **side effect of
+the unit not fully booting**, not a PIN-screen rule and not a single
+VCDS-clearable flag. It is a runtime-state problem, seeded at boot (possibly
+from coding/subsystem init), which is consistent with it having worked before
+the firmware update and not after.
+
+**How to confirm (dynamic).** Read the four inputs live while the unit sits at
+SAFE, over the K-Line diagnostic path (`HARDWARE.md` §7) or a debug probe:
+`hmi_state[0x52]`, `hmi_major_state_q` (`0x8c0eb365`/`0x8c0eb35c`),
+`hmi_source_state_q`, `hmi_state[0x0c]`. Whichever is tripped names the
+subsystem to chase. The same K-Line route is also the way to enter the SAFE
+code without the broken on-screen entry.
 
 ## 6. Where to go next
 
@@ -540,22 +668,29 @@ Ghidra 12.1.4 is installed locally. It has the `SuperH4:BE:32:default` and
 
 The Ghidra project is at `~/ghidra_projects/rnse` on the host (outside the
 repo; Ghidra refuses paths with a `.` element, which rules out the distrobox
-home). It holds V574 `OSM` imported as `SuperH4:BE` at 0x80400200, fully
-analysed, with the §5.2.1, §5.5 and §5.6 functions named. Helper scripts are
-in this repo's `ghidra/` (pass it to Ghidra as `-scriptPath`): `Dump.java`,
-`DumpRange.java`, `DumpRangeCreate.java` (creates functions at every prologue
-first), `Listing.java`, `DisList.java` (forces
+home). It holds three programs: `V574_OSM.bin` (`SuperH4:BE` at 0x80400200,
+with the §5.2.1, §5.5 and §5.6 functions named), `OSM_V220.bin` (`SuperH4:BE`
+at 0x8000C100, with the §5.7 functions named) and `APM_V220.bin` (at
+0x00280000) — the last two are the bench unit's own V220 firmware. Helper
+scripts are in this repo's `ghidra/` (pass it to Ghidra as `-scriptPath`):
+`Dump.java`, `DumpRange.java`, `DumpRangeCreate.java` (creates functions at
+every prologue first), `Listing.java`, `DisList.java` (forces
 disassembly, for switch cases that auto-analysis missed), `Callers.java`,
-`Label.java` and `LabelFp.java`.
+`Label.java` and `LabelFp.java` (V574 names), and `LabelV220.java` (the §5.7
+names). To (re)import and name V220 `OSM`:
+
+```
+analyzeHeadless ~/ghidra_projects/rnse rnse -import OSM_V220.bin \
+  -processor SuperH4:BE:32:default -loader BinaryLoader -loader-baseAddr 0x8000C100
+analyzeHeadless ~/ghidra_projects/rnse rnse -process OSM_V220.bin \
+  -scriptPath ghidra -postScript LabelV220.java
+```
 
 1. ~~Find where the SH modules load.~~ Done (§3.3).
 2. ~~Find the CAN handler behind the dimmer.~~ Done (§5.2.1): `0x635`, 3 bytes;
    byte 0 is display, byte 1 is KL58s.
-3. **Bench test: send an `ADDR 0x06` frame from the Arduino.** Choose A, B and
-   C, fill in the complements, add the checksum, and send it after the boot
-   handshake. If the backlight responds, that closes `PROTOCOL.md` open
-   question 14 without any CAN. Mid-range values (about half of each period)
-   are the safe first try.
+3. ~~Bench test: send an `ADDR 0x06` frame from the Arduino.~~ Done
+   (2026-10-12, `PROTOCOL.md` §8).
 4. **Evaluate the curves** in `dim_curve_display` and `dim_curve_ab` (from the
    disassembly, not the decompiler output), so that real `0x635` values can be
    turned into exact frames. Then check them against a capture once a head
@@ -563,19 +698,15 @@ disassembly, for switch cases that auto-analysis missed), `Callers.java`,
 5. **Follow `CAN_Pass_mzas`** to find what the power manager wants from `mZAS`
    before it starts the application. That is the precondition for `CANBUS.md`
    T6.
-6. **Bench test: the panel link from §5.5–§5.6.** After `0F 02 11`, send `15`
-   and then the five init frames, waiting for a `15` after each. Then:
-   - `07 06 00 00 00 04 11` → lights the segment for softkey mask bit 0;
-   - `07 06 00 00 00 08 15`, `… 10 1D`, `… 20 2D` → bits 1, 2, 3;
-   - `07 06 00 00 00 00 0D` → all off.
-
-   Record which corner each one lights; that closes the mapping in §5.6. Also
-   worth trying: lamps 0/1/6/7/8 (`o3` `0x01`, `0x02`, `0x40`, `0x80`; `o2`
-   `0x01`), and an odd bit (`o1` `0x04`) to see whether the odd half does
-   anything, such as blinking. If `0x07` does nothing without the init frames,
-   that also says the init matters.
+6. ~~Bench test: the panel link from §5.5–§5.6.~~ Done (2026-10-10 and
+   2026-10-12): init accepted, every lamp bit mapped (§5.6, `PROTOCOL.md` §8).
 7. Load the `.MOT` image as `V850:LE:32` at base 0x3800. This matters less now,
    but it would show what the V850 actually owns.
+8. **Read the live HMI mode inputs** behind the dead rotary (§5.7) while the
+   unit sits at SAFE, over K-Line or a debug probe: `hmi_state[0x52]` and
+   `[0x0c]` (RAM `0x8c0e1c14`), `hmi_major_state_q` (`0x8c0eb365`/`0x8c0eb35c`),
+   `hmi_source_state_q`. Whichever gate is tripped names the subsystem to chase,
+   and likely ties back to item 5 (the application never starting).
 
 Before relying on any of this for the bench unit, check which hardware version
 (V220/V574/VB48) it is.

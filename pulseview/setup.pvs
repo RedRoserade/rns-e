@@ -10,6 +10,34 @@ conversion_type=0
 enabled=true
 name=Board
 
+[D0]
+color=4293776384
+conv_options=0
+conversion_type=0
+enabled=true
+name=Board
+
+[D1]
+color=4285780502
+conv_options=0
+conversion_type=0
+enabled=true
+name=Fuzzer
+
+[D2]
+color=4281623972
+conv_options=0
+conversion_type=0
+enabled=true
+name=Marker
+
+[D3]
+color=4281623972
+conv_options=0
+conversion_type=0
+enabled=true
+name=Reset
+
 [D4]
 color=4293776384
 conv_options=0
@@ -51,6 +79,13 @@ conv_options=0
 conversion_type=0
 enabled=true
 name=Marker
+
+[PPG1]
+color=4294967295
+conv_options=0
+conversion_type=0
+enabled=true
+name=PPG1
 
 [Reset]
 color=4281623972
@@ -113,12 +148,17 @@ name=UART
 
 [view0]
 Board\trace_height=38
+D0\trace_height=38
+D1\trace_height=38
+D2\trace_height=38
+D3\trace_height=38
 D4\trace_height=38
 D5\trace_height=38
 D6\trace_height=38
 D7\trace_height=38
 Fuzzer\trace_height=38
 Marker\trace_height=38
+PPG1\trace_height=38
 Reset\trace_height=38
 offset=22 serialization::archive 20 0 0 0 0 8 84147670 92517281 67496461 99896948 97261839 0 0 0 6
 scale=0.0010827671547543592

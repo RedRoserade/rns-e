@@ -107,7 +107,7 @@ car turns the head unit on. So there is no ignition line to raise on the bench.
 bench: with permanent 12 V and ground only and no CAN whatsoever, **pressing the
 power button turns the unit on.**
 
-That is consistent with the rest of the project. `PROTOCOL.md` §9 establishes
+That is consistent with the rest of the project. `PROTOCOL.md` §10 establishes
 that the power/mute button is not connected to the panel MCU at all — it shunts
 **panel connector pin 7 to ground**, and the head unit senses it directly. So the
 head unit's wake input is a switch closure on a pin already broken out on the

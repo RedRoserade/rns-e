@@ -10,8 +10,9 @@ can be driven from something other than an Audi.
 
 The panel is built around a Fujitsu MB90561A and talks to the main unit over a
 9-pin connector using a small checksummed serial protocol. That protocol is now
-understood well enough to boot the panel from an Arduino and read every button
-and both encoders.
+understood well enough to boot the panel from an Arduino, read every button
+and both encoders, and switch and dim its backlight and indicator lamps — no
+head unit needed.
 
 Everything here was derived from logic-analyzer captures of a bench setup, DMM
 tracing, and the connector legend printed on the head unit's own case — no
@@ -20,13 +21,14 @@ vendor documentation was used beyond the publicly available MB90561A datasheet.
 **Full findings: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).** This README is the
 map; that file is the territory.
 
-Four documents, in decreasing order of how settled they are:
+Five documents, in decreasing order of how settled they are:
 
 | document | what it covers | status |
 |---|---|---|
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | the 9-pin serial link — framing, boot, keys, encoders | measured, mostly established |
-| [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md) | the LED driver chain and the analog stage | measured, one node left |
-| [`docs/CANBUS.md`](docs/CANBUS.md) | using a head unit and the vehicle CAN bus to find the backlight command | connector established, experiment **not yet run** |
+| [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md) | the LED driver chain and the analog stage | measured; the switch is commanded over serial |
+| [`docs/FIRMWARE.md`](docs/FIRMWARE.md) | the head unit's firmware: where the panel commands came from | disassembly, partly bench-confirmed |
+| [`docs/CANBUS.md`](docs/CANBUS.md) | using a head unit and the vehicle CAN bus to find the backlight command | **no longer needed** — the command was found without it; kept for reference |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | what to buy for the above, and how to source a head unit to sniff | shopping list |
 
 ---
@@ -36,8 +38,8 @@ Four documents, in decreasing order of how settled they are:
 ```
 docs/
   PROTOCOL.md      the protocol write-up — the main artefact of this project
-  BACKLIGHT.md     the backlight driver chain and the analog stage. Supersedes
-                   PROTOCOL.md §9
+  BACKLIGHT.md     the LED driver chain and the analog stage. How to light it
+                   is PROTOCOL.md §8
   CANBUS.md        plan for driving a head unit over CAN to capture the
                    head-unit-to-panel direction. Not yet executed
   HARDWARE.md      bench shopping list, and notes on sourcing a second head
@@ -56,8 +58,9 @@ src/rnse/
                    writes keymap.json / keymap.md
 
 arduino/
-  listener/        boot the panel, decode its messages, stream them to USB.
-                   This is the sketch you want for normal use
+  listener/        boot the panel, decode its messages, stream them to USB,
+                   and control the backlight and lamps. This is the sketch
+                   you want for normal use
   fuzzer/          sweep byte values at the panel and watch what it answers
   handshake/       dumb two-stage probe: reset, wait, send bytes, observe.
                    Never reads, never decides — for isolating boot behaviour
@@ -100,14 +103,12 @@ talking to the panel:
   microcontroller at all. It shunts **pin 7 to ground** and the head unit senses
   it directly, so it produces no serial traffic. Read it as a plain active-low
   switch.
-- **The backlight** is switched by a two-transistor high-side driver, TR5006
-  gated by TR5015, fed from the +9 V rail the head unit supplies on pin 9. The
-  8-pin IC — a Toshiba TA75W01FU dual op-amp, marked `5W01` with a `9.9` lot
-  code — is *not* in the switching path; op-amp A is parked and op-amp B is a
-  unity-gain buffer sending VRAIL / 2 back up pin 8 as a rail monitor. What
-  drives TR5015's base is the one node still untraced. Full write-up in
-  [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md), which supersedes this paragraph if
-  the two ever disagree.
+- **The LED supply.** Every LED on the panel runs off a +9 V rail the head unit
+  supplies on pin 9. The panel switches it itself, on serial command (see
+  *Lighting* below), so pin 9 must be fed for anything to light. The 8-pin IC —
+  a Toshiba TA75W01FU dual op-amp — is *not* in the switching path; it sends
+  VRAIL / 2 back up pin 8 as a rail monitor. Details in
+  [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md).
 
 ### Wiring to an Arduino
 
@@ -120,7 +121,11 @@ D2  <- panel TX        (pin 4)
 D3  -> panel RX        (pin 3)
 D8  -> panel reset     (pin 6, active LOW: runs high, stops low)
 GND <-> panel GND      (pin 2) REQUIRED
++9V  -> panel pin 9    from a separate supply (a PP3 will do), only for the LEDs
 ```
+
+**Never put 9 V on pin 1** — that is the MCU's 5 V supply. And do not take the
+9 V rail from the Arduino: the LEDs draw up to a few hundred mA.
 
 Reset should be pulled up with **15–30 kΩ** in normal use, but **omit that
 resistor when driving the panel from an Arduino** — with it in place the reset
@@ -181,6 +186,8 @@ validity on every clean capture.
 | `0x0D` | 6   | rotary delta — 4 channels, relative |
 | `0x0F` | 2   | boot announcement                   |
 | `0x18` | 3   | status / response — 1 payload byte  |
+| `0x06` | 14  | dimmer — head unit → panel          |
+| `0x07` | 6   | lamps — head unit → panel           |
 
 ### Booting the panel — established
 
@@ -201,14 +208,35 @@ the last report; d0 is the volume knob, d2 the scroll wheel.
 
 The panel is **edge-driven, not polled**: after boot it is completely silent
 until something changes. Multi-second gaps on the wire are normal, not a fault.
-Every state change is sent exactly 4 times at ~59 ms, then silence.
+Every state change is sent exactly 4 times at ~59 ms, then silence — or once,
+if each report is ACKed with `0x15`.
+
+### Lighting — established
+
+Two head-unit frames, both from the head unit's firmware and mapped on the
+bench. Full detail in §8 of [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+
+- **`0x07` lamps** — which lights are on: an ON mask and a FLASH mask. `0x0040`
+  is the main button backlight, `0x0004`/`0x0008`/`0x0010`/`0x0020` the
+  NE/NW/SE/SW softkey indicators, `0x0001`/`0x0002` the SD/eject daughter board
+  and the eject button. **Each frame is the whole state**: a corner sent without
+  `0x0040` turns the backlight off.
+- **`0x06` dimmer** — how bright: three PWM channels. C dims the backlight, B
+  the corner indicators; both are off-times (0 = full).
+
+```
+07 06 00 00 00 40 4D                                backlight on
+06 0E 00 00 09 B0 00 00 15 8E 00 00 30 70 10        full brightness
+```
+
+The listener does this after boot by default; `b`, `+`/`-` and `L` control it.
 
 ---
 
 ## What we still need to discover
 
 Ordered roughly by how much they unblock. The full list, with the evidence
-behind each, is §11 of [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+behind each, is §12 of [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 1. ~~**The acknowledgement format (and if it needs any).**~~ **Solved
    (2026-10-10):** the bare byte `0x15`, as the head unit's firmware says
@@ -231,25 +259,17 @@ behind each, is §11 of [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 6. **Why the panel answers only every 2nd–3rd byte** during a sweep, regardless
    of the gap between bytes. The skip scales with the byte rate rather than
    being a fixed timeout, which weakens the "ACK timeout then re-arm" theory.
-7. **What drives TR5015's base.** The last unknown node in the backlight
-   circuit. The 8-pin IC is now identified — a Toshiba TA75W01FU dual op-amp,
-   and a bystander to the switching path — and everything downstream of that
-   base is traced. All nine connector pins are accounted for and none is a
-   backlight enable, so the drive must come from the MCU, which implies a
-   serial command nobody has seen. See
-   [`docs/BACKLIGHT.md`](docs/BACKLIGHT.md).
+7. ~~**What drives the backlight.**~~ **Solved (2026-10-12):** a serial
+   command after all — lamp frame `0x07` bit `0x0040`, dimmed by channel C of
+   the dimmer frame `0x06`, with pin 9 fed. Found in the head unit's firmware
+   (`docs/FIRMWARE.md` §5.2.1, §5.6) and mapped on the bench
+   (`docs/PROTOCOL.md` §8).
 8. **What PPG1 on connector pin 5 carries.** It is a hardware PWM output from
    the MB90561A that has never been captured. Worth an LA channel next time the
-   panel is on the bench. Four other PPG channels are also unaccounted for, and
-   one of them is the prime suspect for the backlight drive.
-9. **Everything the head unit says to the panel.** Every message decoded so far
-   travels panel → head unit, because every capture so far was taken with the
-   panel driven by an Arduino that only knows the commands already guessed. A
-   powered head unit knows all of them. [`docs/CANBUS.md`](docs/CANBUS.md) is
-   the plan for putting one on the wire. Two things point the same way: the
-   connector legend shows **no illumination pin on any connector**, and a head
-   unit powered on the bench with no CAN boots to its PIN screen while the
-   attached, powered panel stays dark. So the stimulus has to arrive over CAN.
+   panel is on the bench.
+9. **What the remaining head-unit frames do**: init frames `0x02`, `0x03`,
+   `0x0A`, `0x09`, and `0x01` / `0x0E`, plus dimmer channel A. Nothing so far
+   depends on them.
 
 ## Status
 

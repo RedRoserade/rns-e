@@ -6,8 +6,10 @@
 // Brings the board up properly, decodes its messages, and streams them to the
 // PC over USB. Can play the head unit's side of the link as traced in its
 // firmware (docs/FIRMWARE.md §5.5): the init frames after the boot
-// announcement, and ACK/NAK for the panel's messages. Can also send the head
-// unit's backlight frame (ADDR 0x06, docs/FIRMWARE.md §5.2.1).
+// announcement, and ACK/NAK for the panel's messages. Controls the lighting
+// with the head unit's two frames (docs/PROTOCOL.md §8): the lamps (ADDR 0x07),
+// which switch the button backlight and the indicators on and off, and the
+// dimmer (ADDR 0x06), which sets their brightness. Can also send any raw frame.
 //
 // ---------------------------------------------------------------------------
 // Why the board link is bit-banged
@@ -23,17 +25,21 @@
 // Wiring
 // ---------------------------------------------------------------------------
 // The panel connector is a 9-pin Molex PicoBlade, 1.25 mm pitch:
-//   1 VCC(+5V)  2 GND  3 RX  4 TX  5 PPG1  6 reset  7 power btn  8,9 backlight
+//   1 VCC(+5V)  2 GND  3 RX  4 TX  5 PPG1  6 reset  7 power btn
+//   8 rail monitor (out, +9V / 2)  9 LED rail (in, +9V)
 //
 //   D2  <- panel TX      (pin 4, input)
 //   D3  -> panel RX      (pin 3, output)
 //   D8  -> panel reset   (pin 6, active LOW: board runs high, stops low)
 //   GND <-> panel GND    (pin 2) REQUIRED
+//   +9V  -> panel pin 9  from a separate supply (a PP3 will do), NOT the
+//           Arduino. Without it nothing lights. NEVER put 9 V on pin 1.
 //
 // Reset wants a 15-30k pull-up in normal use. OMIT IT HERE: with the resistor
 // in place the Arduino cannot assert reset cleanly and the board never comes
 // up properly. Pins 7-9 are not on the serial bus at all -- the power/mute
-// button just grounds pin 7, and 8/9 go to the backlight driver IC.
+// button just grounds pin 7, pin 9 feeds every LED on the panel, and pin 8
+// reports half of it back (docs/BACKLIGHT.md).
 //
 // Serial to PC: 115200 8N1.
 //
@@ -44,11 +50,25 @@
 //   a   toggle the link layer: ACK/NAK the panel, retransmit until ACKed
 //   i   toggle the init frames after the boot announcement (applies on `r`)
 //   s   print status
-//   b   send the backlight frame with the current A/B/C
-//   +   raise A/B/C by 1/10 of each period, then send
-//   -   lower A/B/C by 1/10 of each period, then send
+//   b   toggle the button backlight (lamp bit 0x0040), send the lamp frame
+//   +   brightness up one step (doubles the on-time), send the dimmer frame
+//   -   brightness down one step (halves the on-time), send the dimmer frame
+//   l   resend the lamp and dimmer frames as they stand
+//   L ON [FLASH]<newline>
+//       set the lamp masks and send. Hex, bits as in the table below, e.g.
+//       `L 44` = backlight + NE, `L 44 4` = the same with NE flashing
 //   D A B C<newline>
-//       set A/B/C and send. Decimal or 0x hex, e.g. `D 0xAC7 0x4D8 0x1838`
+//       set the raw dimmer values and send. Decimal or 0x hex. B and C are
+//       OFF-times: 0 is full brightness, the period is off. e.g. `D 0 0 0x2800`
+//   F ADDR LEN payload...<newline>
+//       send a raw frame, hex bytes, checksum appended, e.g.
+//       `F 07 06 00 00 00 40`
+//
+// Lamp bits (docs/PROTOCOL.md §8), the same in the ON and FLASH masks:
+//   0x0001 SD/eject daughter board   0x0002 eject button
+//   0x0004 NE   0x0008 NW   0x0010 SE   0x0020 SW   (brightness: channel B)
+//   0x0040 button backlight                         (brightness: channel C)
+// A flash bit flashes its lamp whether or not the ON bit is set.
 //   ?   help
 
 #include <Arduino.h>
@@ -95,8 +115,10 @@
 // Answer the boot announcement with the head unit's init sequence instead of
 // a bare ACK. The head unit steps through these on each ACK from the panel;
 // the last one is a dimmer frame with every channel at zero but C. All five
-// are verbatim from the firmware, checksums included. Off: bare 0x15, which
-// is the handshake the bench has always used.
+// are verbatim from the firmware, checksums included. That last frame leaves
+// everything dark (B = B' = 0, C = full), so after it we send our own dimmer
+// and lamp frames. Off: bare 0x15, which is the handshake the bench has
+// always used.
 #define INIT_DEFAULT  1
 
 // What goes out before the first init frame. By the head unit's own ACK rule
@@ -124,21 +146,38 @@ static const uint8_t INIT_LENS[] = { sizeof INIT_02, sizeof INIT_03, sizeof INIT
 
 #define MAXMSG        32
 
-// --------------------------------------------------------- backlight frame --
-// Traced from the head unit's firmware (V574 OSM, fp_send_dim_frame at
-// 0x8060530C), never observed on the wire:
+// ---------------------------------------------------------------- lighting --
+// Two frames, from the head unit's firmware and mapped on the bench
+// (docs/PROTOCOL.md §8). Every LED on the panel runs off connector pin 9.
 //
-//   06 0E  A  B'  C  A'  B  C'  CK      each value u16 big-endian
-//   A' = PERIOD_A - A,  B' = PERIOD_B - B,  C' = PERIOD_C - C
+// Lamps -- on/off. A 32-bit lamp word, each lamp a pair of bits (2k = on,
+// 2k+1 = flash), split by parity into two u16 big-endian masks:
 //
-// The head unit derives B from 0x635 byte 0 (display) and C from byte 1
-// (KL58s); A also comes from byte 0. Which panel output each channel drives,
-// and in which direction, is not known -- that is what this is for. Values are
-// capped at the period, as the head unit caps them. Defaults: half of each.
+//   07 06  FLASH  ON  CK
+//
+// Dimmer -- brightness. Three PWM channels, each value u16 big-endian and
+// sent with its complement against the channel's period:
+//
+//   06 0E  A  B'  C  A'  B  C'  CK      A' = PERIOD_A - A, ...
+//
+// B is the off-time of the corner indicators, C of the button backlight:
+// 0 = full, the period = off. A had no visible effect. The eye is roughly
+// logarithmic, so full and half look alike and all the visible change is at
+// the bottom: on the bench the backlight was visible down to C' = 0x171 (3%)
+// and gone at C' = 0x70. Hence +/- step by doubling and halving.
+#define LAMP_ADDR     0x07
+#define LAMP_BACKLIGHT 0x0040
+#define LAMP_DEFAULT  LAMP_BACKLIGHT   // after init: backlight on, indicators off
+
 #define DIM_ADDR      0x06
 #define PERIOD_A      0x158E
 #define PERIOD_B      0x09B0
 #define PERIOD_C      0x3070
+
+// Brightness steps: on-time = period >> (BRIGHT_MAX - level), level 0 = off.
+// Level 4 is 1/32 of the period, the dimmest the bench could see.
+#define BRIGHT_MAX    9
+#define BRIGHT_DEFAULT BRIGHT_MAX
 
 // -------------------------------------------------------------- bit timing --
 // 9600 baud = 104.1667 us/bit. The constants below are the nominal values
@@ -157,7 +196,9 @@ static const uint8_t INIT_LENS[] = { sizeof INIT_02, sizeof INIT_03, sizeof INIT
 static bool ackEnabled = ACK_DEFAULT;
 static bool initEnabled = INIT_DEFAULT;
 static const uint16_t dimPeriod[3] = { PERIOD_A, PERIOD_B, PERIOD_C };
-static uint16_t dimVal[3] = { PERIOD_A / 2, PERIOD_B / 2, PERIOD_C / 2 };
+static uint16_t dimVal[3] = { 0, 0, 0 };     // A, B, C: B and C at full
+static uint8_t brightness = BRIGHT_DEFAULT;
+static uint16_t lampOn = LAMP_DEFAULT, lampFlash = 0;
 static unsigned long msgCount = 0, errCount = 0;
 
 // ------------------------------------------------------------ software UART --
@@ -387,6 +428,9 @@ static bool send_frame(const uint8_t *f, uint8_t n, uint8_t lead, const char *wh
   return false;
 }
 
+static void send_dim();
+static void send_lamps();
+
 // The head unit's answer to `0F 02 11`: the init sequence, or a bare ACK.
 static void answer_announce() {
   if (!initEnabled) {
@@ -403,6 +447,8 @@ static void answer_announce() {
     }
   }
   Serial.println("# init done");
+  send_dim();
+  send_lamps();
 }
 
 // A message from the panel outside any exchange of ours.
@@ -460,15 +506,58 @@ static void send_dim() {
   send_frame(f, sizeof f, 0, what);
 }
 
-// Step every channel by a tenth of its period, clamped to 0..period.
-static void step_dim(int8_t dir) {
-  for (uint8_t i = 0; i < 3; i++) {
-    int32_t v = (int32_t)dimVal[i] + dir * (int32_t)(dimPeriod[i] / 10);
-    if (v < 0) v = 0;
-    if (v > dimPeriod[i]) v = dimPeriod[i];
-    dimVal[i] = v;
+// Step B and C together, one brightness level up or down. A is left alone.
+static void step_brightness(int8_t dir) {
+  if ((dir < 0 && brightness == 0) || (dir > 0 && brightness == BRIGHT_MAX)) {
+    Serial.println(dir < 0 ? "# already off" : "# already at full");
+    return;
   }
+  brightness += dir;
+  for (uint8_t i = 1; i < 3; i++) {
+    uint16_t on = brightness ? dimPeriod[i] >> (BRIGHT_MAX - brightness) : 0;
+    dimVal[i] = dimPeriod[i] - on;
+  }
+  Serial.print("# brightness ");
+  Serial.print(brightness);
+  Serial.print('/');
+  Serial.println(BRIGHT_MAX);
   send_dim();
+}
+
+static void send_lamps() {
+  uint8_t f[7];
+  f[0] = LAMP_ADDR;
+  f[1] = 0x06;                               // LEN: 4 payload bytes
+  put_u16(&f[2], lampFlash);
+  put_u16(&f[4], lampOn);
+  f[6] = checksum(f, 6);
+
+  char what[32];
+  snprintf(what, sizeof what, "lamps on=0x%X flash=0x%X", lampOn, lampFlash);
+  send_frame(f, sizeof f, 0, what);
+}
+
+// `L ON [FLASH]`: the L has been read; parse the rest of the line.
+static void read_lamp_line() {
+  char line[24];
+  uint8_t n = Serial.readBytesUntil('\n', line, sizeof line - 1);
+  line[n] = '\0';
+  char *end;
+  unsigned long on = strtoul(line, &end, 16);
+  if (end == line || on > 0xFFFF) {
+    Serial.println("# usage: L ON [FLASH]   (hex masks, e.g. L 44)");
+    return;
+  }
+  char *p = end;
+  unsigned long flash = strtoul(p, &end, 16);
+  if (end == p) flash = 0;
+  else if (flash > 0xFFFF) {
+    Serial.println("# usage: L ON [FLASH]   (hex masks, e.g. L 44 4)");
+    return;
+  }
+  lampOn = on;
+  lampFlash = flash;
+  send_lamps();
 }
 
 // `D A B C`: the D has been read; parse the rest of the line.
@@ -496,6 +585,35 @@ static void read_dim_line() {
     dimVal[i] = v[i];
   }
   send_dim();
+}
+
+// `F ADDR LEN payload...`: the F has been read; parse hex bytes to the end of
+// the line, append the checksum and send. LEN is taken as typed, not checked,
+// so malformed frames can be sent on purpose.
+static void read_raw_line() {
+  char line[3 * MAXMSG + 8];
+  uint8_t n = Serial.readBytesUntil('\n', line, sizeof line - 1);
+  line[n] = '\0';
+  uint8_t f[MAXMSG];
+  uint8_t k = 0;
+  char *p = line;
+  for (;;) {
+    char *end;
+    unsigned long v = strtoul(p, &end, 16);
+    if (end == p) break;
+    if (k == MAXMSG - 1 || v > 0xFF) {
+      Serial.println("# frame too long, or a byte over FF");
+      return;
+    }
+    f[k++] = v;
+    p = end;
+  }
+  if (k < 2) {
+    Serial.println("# usage: F ADDR LEN payload...   (hex, checksum appended)");
+    return;
+  }
+  f[k] = checksum(f, k);
+  send_frame(f, k + 1, 0, "raw");
 }
 
 // -------------------------------------------------------------------- misc --
@@ -535,7 +653,10 @@ static void reset_panel() {
 
 static void help() {
   Serial.println("# commands: r=reset  a=toggle ack/nak  i=toggle init  s=status  ?=help");
-  Serial.println("# backlight: b=send  +/-=step  D A B C=set+send (0x06 frame)");
+  Serial.println("# lights: b=backlight on/off  +/-=brightness  l=resend");
+  Serial.println("#   L ON [FLASH]  lamps, hex: 1 SD/eject 2 eject 4 NE 8 NW 10 SE 20 SW 40 backlight");
+  Serial.println("#   D A B C  raw dimmer (B, C = off-time: 0 full, period off)");
+  Serial.println("# raw: F ADDR LEN payload (hex, CK added), e.g. F 07 06 00 00 00 40");
 }
 
 static void status() {
@@ -543,9 +664,13 @@ static void status() {
   Serial.print(" init=");    Serial.print(initEnabled ? "on" : "off");
   Serial.print(" messages="); Serial.print(msgCount);
   Serial.print(" errors=");   Serial.println(errCount);
+  Serial.print("# lamps on=0x"); Serial.print(lampOn, HEX);
+  Serial.print(" flash=0x");      Serial.println(lampFlash, HEX);
   Serial.print("# dim A=0x"); Serial.print(dimVal[0], HEX);
   Serial.print(" B=0x");      Serial.print(dimVal[1], HEX);
-  Serial.print(" C=0x");      Serial.println(dimVal[2], HEX);
+  Serial.print(" C=0x");      Serial.print(dimVal[2], HEX);
+  Serial.print(" brightness="); Serial.print(brightness);
+  Serial.print('/');          Serial.println(BRIGHT_MAX);
 }
 
 // -------------------------------------------------------------------- main --
@@ -573,10 +698,13 @@ void loop() {
       case 'a': ackEnabled = !ackEnabled; status(); break;
       case 'i': initEnabled = !initEnabled; status(); Serial.println("# applies on the next reset (r)"); break;
       case 's': status(); break;
-      case 'b': send_dim(); break;
-      case '+': step_dim(+1); break;
-      case '-': step_dim(-1); break;
+      case 'b': lampOn ^= LAMP_BACKLIGHT; send_lamps(); break;
+      case '+': step_brightness(+1); break;
+      case '-': step_brightness(-1); break;
+      case 'l': send_dim(); send_lamps(); break;
+      case 'L': read_lamp_line(); break;
       case 'D': read_dim_line(); break;
+      case 'F': read_raw_line(); break;
       case '?': help(); break;
       default: break;
     }

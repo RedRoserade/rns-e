@@ -3,14 +3,15 @@
 Working notes on the 8-pin IC at connector pins 8/9, the discrete LED driver
 around it, and how the backlight is switched.
 
-Companion to `PROTOCOL.md`, which covers the serial link. This file supersedes
-`PROTOCOL.md` §9 "The 8-pin IC drives the backlight" and open question 11 — see
-§11 for what needs changing there.
+Companion to `PROTOCOL.md`, which covers the serial link. **How to light the
+panel is `PROTOCOL.md` §8**; this file is the circuit behind it.
 
-**Status.** The driver chain is now understood end to end except for one node:
-what drives the base of `TR5015`. Everything downstream of that node is
-identified, and the topology is conventional throughout. The 8-pin IC turns out
-not to be part of the switching path at all.
+**Status.** The driver chain is understood end to end except for one traced
+node, the base of `TR5015`, and that is now known to be driven by the MCU on
+serial command: the lamp frame `0x07` bit `0x0040` switches the button
+backlight, and channel C of the dimmer frame `0x06` sets its brightness by PWM
+(bench, 2026-10-12; §8). The topology is conventional throughout. The 8-pin IC
+is not part of the switching path at all.
 
 ---
 
@@ -279,7 +280,21 @@ backlight. There must be at least one more component.
 - If the capacitor is large, it may also be a deliberate **soft-start**, fading
   the backlight in rather than snapping it on.
 
-### The control source is on the panel — **inferred, by elimination**
+### The control source is the MCU, on serial command — **confirmed** (2026-10-12)
+
+The elimination argument below predicted it, and the bench confirmed it: the
+backlight lights only with lamp frame `07 06 00 00 00 40` **and** a non-zero
+on-time on dimmer channel C, and its brightness is graded across C
+(`PROTOCOL.md` §8). C has its own period (`0x3070`) and is sent as a
+duty/complement pair, which fits a PPG channel driving TR5015 — the "Prime
+suspects" below. Which PPG pin it is has not been probed; it no longer matters
+for driving the panel.
+
+The corner indicators (dimmer channel B) and the SD/eject daughter board are
+lit by the same rail but switched separately; their drivers have not been
+traced.
+
+#### The original argument
 
 All nine connector pins are accounted for:
 
@@ -348,6 +363,10 @@ averaging ~15 mA puts total collector current at **150–400 mA**.
 
 ## 9. Test plan
 
+Since 2026-10-12 the backlight can be lit by command (`PROTOCOL.md` §8), so
+T1, T2 and T7 are no longer needed to drive the panel. They remain the way to
+confirm the circuit reading.
+
 **T1 — force the backlight on, bypassing the MCU entirely.** With the rail fed
 (§10), **bridge TR5015's collector to its emitter**. That imitates TR5015 being
 fully on and should light every string. Both pins are accessible on the SOT-23,
@@ -375,7 +394,8 @@ soft-start ramp, or PWM smoothing.
 switch reading. Volts would mean linear operation and a different design intent.
 
 **T7 — once the backlight can be lit, sweep the serial command space again**
-and watch for it changing. Only meaningful after T1 and T2.
+and watch for it changing. **Done another way:** the commands came from the
+head unit's firmware instead of a sweep (`PROTOCOL.md` §8).
 
 ---
 
@@ -385,6 +405,12 @@ Feed connector pin 9, grounded to connector pin 2, alongside the existing
 Arduino 5 V on pin 1.
 
 **Feed pin 9 only. Putting 9 V on connector pin 1 would destroy the MCU.**
+
+**Bench result (2026-10-12).** A PP3 straight onto pin 9 lit the backlight, the
+four corner indicators and the daughter board at full brightness. A 1 kΩ
+"safety" resistor in series is a mistake: once the switch turns on, the rail
+collapses to ~2 V (≈ 7 mA through the resistor) and nothing visibly lights. If
+you want a limit, use 22–47 Ω, or a meter on its mA range to see the current.
 
 *No series resistor.* A resistor in series with a supply does not set a voltage;
 it drops I × R, so the result depends on how much current the load happens to
@@ -428,48 +454,28 @@ fine for a few minutes.
 
 ---
 
-## 11. What this changes in `PROTOCOL.md`
+## 11. What changed in `PROTOCOL.md`
 
-- §9 "The 8-pin IC drives the backlight" — the IC is a **dual op-amp** and is
-  **not in the switching path at all**. The driver is TR5006, gated by TR5015.
-  Op-amp A is unused; op-amp B is a rail monitor. The speculation about "a
-  boosted rail with a lower-voltage control or feedback input" is resolved:
-  connector pin 9 is the LED supply rail, IC pin 8 is simply VCC, and connector
-  pin 8 is VRAIL / 2 going back to the head unit.
-- §9 markings table — `5W01` is matched, `9.9` is a lot code.
-- §9's "+8.0 V" correction — **reverted**. The rail is **9.0 V**; 8.0 V was a
-  rounded earlier reading. This matters because it is what makes the matched
-  4.7 k / 4.7 k divider land on exactly 4.50 V.
-- §9's conclusion that no UART traffic will light the panel — **likely wrong**,
-  and the reasoning has flipped twice. All nine connector pins are accounted for
-  and none is a backlight enable, so control must originate on the panel, and
-  the MCU is the only candidate (§8).
-- Open question 11 "what part is it" — **SOLVED**, TA75W01FU.
-- Open question 14 — **reopened and narrowed**. There probably *is* a command;
-  find what drives `N_NBASE` first, then sweep.
-- Open question 15 (PPG1) — related. Five PPG channels are unaccounted for and
-  one of them may be the backlight PWM.
-
-See also [`CANBUS.md`](CANBUS.md), which takes the §8 conclusion — that the
-command must originate at the MCU — and plans how to make a head unit issue it,
-using the vehicle CAN bus as the stimulus. Its §2 transcribes the head unit's
-connector legend, which shows **no illumination pin on any connector** and so
-closes off the last non-serial explanation.
+Done. `PROTOCOL.md` §10 now describes pins 8/9 as the rail monitor and the LED
+rail, drops the "8-pin IC drives the backlight" reading and its conclusion that
+no UART traffic could light the panel, and §8 documents the lamp and dimmer
+frames. Open questions 11 and 14 there are closed.
 
 ---
 
 ## 12. Open questions
 
-1. What drives `N_NBASE`? Check the PPG short list in §8. (T2)
-2. Does the chain light when TR5015 is bypassed? (T1)
+1. ~~What drives `N_NBASE`?~~ **The MCU, on command** (§8). Still unprobed:
+   which pin — the PPG short list in §8. (T2)
+2. ~~Does the chain light?~~ **Yes**, by command. T1 not needed.
 3. What feeds op-amp pin 5? Predicted 4.7 kΩ to +9 V. (T4)
-4. Is the backlight on/off, or PWM-dimmable via a PPG channel? (T2, T5)
+4. ~~Is the backlight on/off, or PWM-dimmable?~~ **Dimmable**: dimmer channel
+   C, graded from full down to ~3 % on-time (`PROTOCOL.md` §8).
 5. Where does the `N_OUTB` via go, given OUT B is not the base driver?
-6. Is there a serial command for the backlight? (T7) — **supported by
-   behaviour, still unobserved.** A head unit powered on the bench with no CAN
-   boots to its PIN screen while the panel, attached and with its +9 V rail
-   live, stays dark. So the MCU does not light the backlight on its own
-   initiative; it is waiting for something. See `CANBUS.md` §3.
+6. ~~Is there a serial command for the backlight?~~ **Yes** (2026-10-12):
+   lamp frame `07 06 00 00 00 40` plus dimmer channel C below full
+   (`PROTOCOL.md` §8). It explains the earlier observation that a head unit
+   stuck at its PIN screen leaves the panel dark: it never sends the lamp bit.
 7. What are `FY 67` and TR5015, and is the 5W01's refdes readable?
 
 ---
