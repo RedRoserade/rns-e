@@ -68,6 +68,7 @@
 //   0x0001 SD/eject daughter board   0x0002 eject button
 //   0x0004 NE   0x0008 NW   0x0010 SE   0x0020 SW   (brightness: channel B)
 //   0x0040 button backlight                         (brightness: channel C)
+//   0x0080 scroll wheel dial   0x0100 volume dial   (brightness: channel C)
 // A flash bit flashes its lamp whether or not the ON bit is set.
 //   ?   help
 
@@ -654,7 +655,8 @@ static void reset_panel() {
 static void help() {
   Serial.println("# commands: r=reset  a=toggle ack/nak  i=toggle init  s=status  ?=help");
   Serial.println("# lights: b=backlight on/off  +/-=brightness  l=resend");
-  Serial.println("#   L ON [FLASH]  lamps, hex: 1 SD/eject 2 eject 4 NE 8 NW 10 SE 20 SW 40 backlight");
+  Serial.println("#   L ON [FLASH]  lamps, hex: 1 SD/eject 2 eject 4 NE 8 NW 10 SE 20 SW");
+  Serial.println("#     40 backlight 80 scroll dial 100 volume dial");
   Serial.println("#   D A B C  raw dimmer (B, C = off-time: 0 full, period off)");
   Serial.println("# raw: F ADDR LEN payload (hex, CK added), e.g. F 07 06 00 00 00 40");
 }

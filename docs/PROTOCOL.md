@@ -443,7 +443,9 @@ F1:F0  FLASH mask, u16 big-endian, same bit layout
 | `0x0010` | SE softkey indicator | B |
 | `0x0020` | SW softkey indicator | B |
 | **`0x0040`** | **main button backlight** | **C** |
-| `0x0080`–`0x8000` | nothing visible | — |
+| `0x0080` | scroll wheel dial | C |
+| `0x0100` | volume dial | C |
+| `0x0200`–`0x8000` | nothing visible | — |
 
 - **The frame is the whole lamp state, and the backlight is one of its bits.**
   Each frame replaces the last. Sending a corner on its own (`… 00 04`) turns
@@ -461,6 +463,7 @@ F1:F0  FLASH mask, u16 big-endian, same bit layout
 | `07 06 00 00 00 40 4D` | backlight only |
 | `07 06 00 00 00 44 51` | backlight + NE |
 | `07 06 00 00 00 04 11` | NE only — backlight **off** |
+| `07 06 00 00 01 C0 CE` | backlight + both dials — what the head unit sends with the lights on |
 | `07 06 00 00 00 00 0D` | everything off |
 
 ### `ADDR 0x06` — dimmer
@@ -479,7 +482,7 @@ channel's period. **B and C are off-times**: the brightness follows B' and C'.
 |---|---|---|
 | A | `0x158E` | nothing visible |
 | B | `0x09B0` | the four softkey indicators |
-| C | `0x3070` | the main button backlight |
+| C | `0x3070` | the main button backlight and both dials |
 
 Full brightness, A = B = C = 0: `06 0E 00 00 09 B0 00 00 15 8E 00 00 30 70 10`.
 
@@ -493,6 +496,10 @@ Graded, not on/off. Backlight sweep (lamp `0x0040`, A = B = 0):
 | `0x2EFF` | `0x171` | 3.0 % | dimmest visible, dim room |
 | `≥ 0x3000` | `≤ 0x70` | < 1 % | off |
 
+The two dials are on C as well. With lamps `0x01C0` lit, C at its period
+turned the backlight and both dials off; B at its period and A at its period
+left them on.
+
 The eye is roughly logarithmic, so the visible range is the bottom few percent;
 step brightness by doubling and halving the on-time, not linearly. The corner
 indicators: B = 0 is brighter than half, B = `0x9B0` is off; not swept further.
@@ -505,7 +512,9 @@ the panel is dark until both frames are sent.
 
 ### Not yet known
 
-- What channel A drives, if anything.
+- What channel A drives, if anything. It does nothing to the main panel
+  (lamps `0x01C0` lit: A = `0x158E` changes nothing). The SD card daughter
+  board (`0x0001`) is the remaining candidate; it was not fitted on the bench.
 - Whether `0x0001` / `0x0002` have a dimmer channel (A is the candidate).
 - Whether the corner channel B shows the same steep bottom end as C.
 

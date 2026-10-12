@@ -352,8 +352,8 @@ unused PPG channels.
 
 **Bench result (2026-10-12).** Sent from the Arduino, the frame works as traced,
 and the channels map to the panel as `PROTOCOL.md` §8 sets out: **B dims the
-four softkey indicators, C dims the button backlight, A has no visible
-effect.** B and C are off-times; the brightness follows B' and C'. So the
+four softkey indicators, C dims the button backlight and both dials, A has no
+visible effect.** B and C are off-times; the brightness follows B' and C'. So the
 softkey indicators follow `0x635` byte 0 (display) and the backlight follows
 byte 1 (KL58s). That the panel dims with B' and C' rather than B and C suggests
 `dim_curve_*` produces off-times — worth checking when the curves are
@@ -551,17 +551,22 @@ turn all four off.
 | 8 | `o3` `0x10` | **SE** | softkey mask bit 2 |
 | 10 | `o3` `0x20` | **SW** | softkey mask bit 3 |
 | 12 | `o3` `0x40` | **main button backlight** | dimmer state byte 0 = 1 — i.e. lights on |
-| 14, 16 | `o3` `0x80`, `o2` `0x01` | nothing visible | same |
+| 14 | `o3` `0x80` | **scroll wheel dial** | same |
+| 16 | `o2` `0x01` | **volume dial** | same |
 | odd bits | `o0`/`o1` | **flash** the lamp of the even bit below | never set by V574 |
 
 - The frame is the whole lamp state. Sending a corner without `0x40` turns the
   backlight off; the head unit avoids that because `lamp_update` rebuilds the
   whole word each time.
+- So "lights on" sets the backlight and both dials together: `o2:o3` = `01 C0`.
+  The first bench pass missed the dials (the 2026-10-12 tables said "nothing
+  visible" for bits 14 and 16); they were found later by sending `0x80` and
+  `0x100` alone.
 - `o3` = `0x3C` lights all four corners, so the one-bit rule is the head
   unit's, not the panel's.
 - The mask order NE, NW, SE, SW is **not** the key-code order below.
 - The lamps also need a non-zero on-time on their dimmer channel (§5.2.1): B for
-  the corners, C for the backlight. The init frame's dimmer leaves both at zero,
+  the corners, C for the backlight and the dials. The init frame's dimmer leaves both at zero,
   so nothing lights until a real dimmer frame follows.
 
 The UI's key codes are known from a debug switch (0x805FAD78): `SKNW=5`,
