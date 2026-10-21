@@ -1,0 +1,30 @@
+[project]
+name = "rnse-ui"
+version = "0.1.0"
+description = "Prototype head-unit UI for the RNS-E project, in the style of the original Audi RNS-E"
+readme = "README.md"
+# 3.11 is what Raspberry Pi OS Bookworm ships; keep it installable there.
+requires-python = ">=3.11"
+authors = [
+    { name = "André Carvalho", email = "afecarvalho@gmail.com" },
+]
+license = "Apache-2.0"
+dependencies = [
+    "pyside6-essentials>=6.8",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+rnse-ui = "rnse_ui.__main__:main"
+rnse-ui-watch = "rnse_ui.devwatch:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
