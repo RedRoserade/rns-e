@@ -7,7 +7,7 @@ Window {
     visible: true
     visibility: fullscreen ? Window.FullScreen : Window.Windowed
     title: "RNS-E"
-    color: "blue"
+    color: Theme.background
 
     Frame {
         // On a bigger fullscreen display, keep 800x480 and centre it.

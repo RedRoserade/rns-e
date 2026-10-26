@@ -22,7 +22,7 @@ Item {
             text: ui.screenId
             color: Theme.text
             font.family: Theme.fontFamily
-            font.pixelSize: Theme.bodySize
+            font.pixelSize: Theme.fontSizeBody
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
