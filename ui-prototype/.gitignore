@@ -1,0 +1,3 @@
+# Audi Sans is proprietary: bring your own copy, never commit or ship it
+# (PLAN.md decision 9). Theme.qml uses it when present, Barlow otherwise.
+src/rnse_ui/qml/fonts/AudiSans*

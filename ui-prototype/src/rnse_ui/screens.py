@@ -42,7 +42,7 @@ def _family(root: Screen, *children: tuple[str, str]) -> list[Screen]:
         Screen(id=sid, title=root.title, subtitle=subtitle, corners=root.corners)
         for sid, subtitle in children
     ]
-
+  
 
 # Radio, p. 56
 _RADIO = Screen(
