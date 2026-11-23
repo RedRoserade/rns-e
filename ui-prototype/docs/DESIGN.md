@@ -90,6 +90,9 @@ full accent. The panel has a faint accent glow at the top (our addition).
 
 ## 5. Our additions ("more modern")
 
+Superseded in detail by [`DESIGN_LANGUAGE.md`](DESIGN_LANGUAGE.md), which holds
+the sizes, colours, type and motion rules of the modernised look.
+
 Ideas, not decisions:
 - Short eased transitions between screens and on cursor moves (Theme.animMs).
 - Subtle glow on lit arcs and the selected row.

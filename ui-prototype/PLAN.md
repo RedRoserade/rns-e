@@ -141,7 +141,24 @@ Newest last. Don't delete — strike through and add a new entry if reversed.
    unevenly, so width/height alone isn't enough; four insets are. Touch
    calibration lives in the same screen. See M2a.
 
+8. **2026-11-23 — Visual direction: "modernised RNS-E"** (storyboards at
+   <https://claude.ai/artifact/TmXG6gnNZjaPNCLRagaSCy>), rules in
+   `docs/DESIGN_LANGUAGE.md`. Metro was explored and rejected (doesn't fit the
+   RNS-E). Simple corner choices open as sheets from their corner; the map is
+   full-bleed with floating corner pills. A Home screen with user-editable
+   live cards (Full/Half) and user-assigned corners; SETUP on Home = edit mode.
+
+9. **2026-11-23 — Fonts: Barlow ships, Audi Sans is bring-your-own.** Barlow
+   (SIL OFL) is bundled and is the default. Audi Sans is proprietary: never
+   commit it or bundle it in a build; if a user drops the files into
+   `qml/fonts/` locally, `Theme.qml` prefers them. Numbers stay on Barlow
+   Semi Condensed.
+   The same goes for Audi's manuals and images taken from them: keep your own
+   `docs/rns-e.pdf`, never commit it (`.gitignore` covers `docs/*.pdf`).
+
 Pending (André, while doing `navigation.py`):
+- RETURN at a function's top level: go to Home (proposed), or do nothing?
+  Hold RETURN = Home from anywhere?
 - Corner pressed while in a corner submenu: stack or replace? Same corner again?
 - Function button while in Setup: leave Setup, or switch function and stay in Setup?
 
@@ -151,8 +168,6 @@ Pending (André, while doing `navigation.py`):
 
 - Accent colours for NAME, TEL, INFO, CAR are guesses (`Theme.qml`). Find
   screenshots in the manual or photos of a real unit.
-- Font: the original uses an Audi typeface. Pick an open look-alike (candidates
-  to try: Barlow, Saira Semi Condensed, Exo 2, DIN-alikes) and bundle it.
 - crankshaft-core's video transports (`websocket-jpeg`, `webrtc`): which can a
   PySide6 client consume at acceptable CPU on a Pi? See `docs/ANDROID_AUTO.md`.
 - GPL-3.0 (crankshaft) vs Apache-2.0 (this repo): talking to crankshaft-core
@@ -171,3 +186,10 @@ One line per session: date — what happened — where it stopped.
 - 2026-10-22 — Planned display calibration (M2a): insets, scale-to-fit, touch
   calibration screen. No code yet. Stopped at: unchanged (André on
   `navigation.py`); M2a needs an owner decision when it starts.
+- 2026-11-23 — Design exploration: modernised / projection / Metro mock-ups,
+  then Radio and Home storyboards; wrote `docs/DESIGN_LANGUAGE.md`. Fonts
+  (decision 9): Barlow bundled, `fonts.py` + `Theme.qml` prefer a local Audi
+  Sans. Audi Sans, the RNS-E manual and two images from Audi material were
+  removed from the repo *and its history* (force-pushed). Open: bar height
+  40 → 48 in `Theme.qml`; Theme sizes don't follow DESIGN_LANGUAGE.md yet.
+  Stopped at: unchanged (André on `navigation.py`).

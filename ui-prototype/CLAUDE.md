@@ -48,6 +48,7 @@ src/rnse_ui/
 tests/            pytest, no Qt needed
 docs/
   DESIGN.md       visual + behaviour spec extracted from the manual
+  DESIGN_LANGUAGE.md  the modernised look: tokens, components, motion (follow it for new QML)
   ANDROID_AUTO.md crankshaft-core findings and integration options
 ```
 
