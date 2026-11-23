@@ -1,3 +1,7 @@
 # Audi Sans is proprietary: bring your own copy, never commit or ship it
 # (PLAN.md decision 9). Theme.qml uses it when present, Barlow otherwise.
 src/rnse_ui/qml/fonts/AudiSans*
+
+# Audi's manuals (RNS-E, MMI) are copyrighted reference material: keep your
+# own copy in docs/, never commit it.
+docs/*.pdf

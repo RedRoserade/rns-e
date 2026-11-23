@@ -5,7 +5,8 @@ for the screen, Python (PySide6) behind it. Runs on the desktop now, and is
 meant for an 800x480 screen on a Raspberry Pi.
 
 Plan, status and decisions: [`PLAN.md`](PLAN.md). Design reference:
-[`docs/DESIGN.md`](docs/DESIGN.md) and `rns-e.pdf`.
+[`docs/DESIGN.md`](docs/DESIGN.md) and the RNS-E operating manual, which
+isn't included (it's Audi's): put your own copy at `docs/rns-e.pdf`.
 
 ## Run
 
