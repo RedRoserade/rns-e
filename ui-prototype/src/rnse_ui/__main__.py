@@ -20,6 +20,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 
+from .fonts import audi_sans_available
 from .panel import KeyboardPanel, PanelEvent
 from .ui_state import UiState
 
@@ -47,6 +48,9 @@ def main() -> int:
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("ui", ui)
     engine.rootContext().setContextProperty("fullscreen", args.fullscreen)
+    engine.rootContext().setContextProperty(
+        "audiSans", audi_sans_available(QML_DIR / "fonts")
+    )
     engine.load(QML_DIR / "Main.qml")
     if not engine.rootObjects():
         return 1

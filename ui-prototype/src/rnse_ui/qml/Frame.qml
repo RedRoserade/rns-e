@@ -215,7 +215,7 @@ Item {
 
                 font.family: frame.activeCorner === 0 ? Theme.fontFamilyBold : Theme.fontFamily
                 font.pixelSize: Theme.fontSizeCorner
-                font.bold: Theme.fontBoldSynthetic
+                font.bold: frame.activeCorner === 0 && Theme.fontBold
 
                 Behavior on color {
                     ColorAnimation {
@@ -235,7 +235,7 @@ Item {
                 color: Theme.accent
                 font.family: Theme.fontFamilyBold
                 font.pixelSize: Theme.fontSizeTitle
-                font.bold: Theme.fontBoldSynthetic
+                font.bold: Theme.fontBold
             }
 
             Text {
@@ -248,7 +248,7 @@ Item {
 
                 font.family: frame.activeCorner === 1 ? Theme.fontFamilyBold : Theme.fontFamily
                 font.pixelSize: Theme.fontSizeCorner
-                font.bold: Theme.fontBoldSynthetic
+                font.bold: frame.activeCorner === 1 && Theme.fontBold
 
                 Behavior on color {
                     ColorAnimation {
@@ -287,7 +287,7 @@ Item {
 
                 font.family: frame.activeCorner === 2 ? Theme.fontFamilyBold : Theme.fontFamily
                 font.pixelSize: Theme.fontSizeCorner
-                font.bold: Theme.fontBoldSynthetic
+                font.bold: frame.activeCorner === 2 && Theme.fontBold
 
                 Behavior on color {
                     ColorAnimation {
@@ -307,7 +307,7 @@ Item {
 
                 font.family: frame.activeCorner === 3 ? Theme.fontFamilyBold : Theme.fontFamily
                 font.pixelSize: Theme.fontSizeCorner
-                font.bold: Theme.fontBoldSynthetic
+                font.bold: frame.activeCorner === 3 && Theme.fontBold
 
                 Behavior on color {
                     ColorAnimation {

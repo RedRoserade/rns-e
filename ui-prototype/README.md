@@ -25,6 +25,14 @@ Render a PNG without opening a window (handy for checking changes):
 QT_QPA_PLATFORM=offscreen uv run rnse-ui --play nav,top_right_quad --screenshot out.png
 ```
 
+## Fonts
+
+The UI ships with [Barlow](https://github.com/jpt/barlow) (SIL OFL), which
+looks close to the original. If you own **Audi Sans**, copy
+`AudiSans-Roman.ttf` and `AudiSans-Bold.ttf` into `src/rnse_ui/qml/fonts/`
+and the UI uses them instead. They're git-ignored: Audi Sans is proprietary,
+so don't commit it or put it in a build you hand to anyone else.
+
 ## Keyboard = front panel
 
 | Panel | Key |
